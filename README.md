@@ -29,7 +29,7 @@ For playback, VLC can open the same URL.
 
 ## PowerShell helper (`qvcp.ps1`)
 
-`qvcp.ps1` wraps ffmpeg so you can archive the copied stream URL with one command. It takes the clip label and the URL:
+`qvcp.ps1` wraps ffmpeg so you can archive the copied stream URL with one command. Add it to your PowerShell profile so the `qvcp` function is always available (e.g., `if (Test-Path 'C:\tools\qvcp\qvcp.ps1') { . 'C:\tools\qvcp\qvcp.ps1' }`). It takes the clip label and the URL:
 
 ```pwsh
 qvcp "Show • Episode 12" "https://example.com/path/to/master.m3u8?token=..."
