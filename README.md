@@ -41,6 +41,14 @@ qvcp "Show • Episode 12" "https://example.com/path/to/master.m3u8?token=..."
 - Records the title and original URL as `title` / `comment` metadata tags.
 - Temporarily sets the terminal title to the label to make long captures easy to identify.
 
+### YouTube / yt-dlp mode (`-Y`)
+
+Pass `-Y` to download with `yt-dlp` instead of ffmpeg. The title is optional in this mode — yt-dlp handles the filename automatically. `yt-dlp` must be on `PATH` or an error is thrown. The command always includes `--cookies "C:\Users\FRC\Documents\cookies.firefox-private.txt"`. The same date-stamped folder is used.
+
+```pwsh
+qvcp -Y "https://www.youtube.com/watch?v=..."
+```
+
 Drop the copied HLS/DASH URL straight into `qvcp` to build an `mp4` that’s ready for VLC, editing, or archival.
 
 ## How it decides “best”
