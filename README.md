@@ -43,13 +43,14 @@ qvcp "Show • Episode 12" "https://example.com/path/to/master.m3u8?token=..."
 
 ### YouTube / yt-dlp mode (`-Y`)
 
-Pass `-Y` to download with `yt-dlp` instead of ffmpeg. The title is optional in this mode — yt-dlp handles the filename automatically. `yt-dlp` must be on `PATH` or an error is thrown. The command always includes `--ignore-config` and `--cookies "C:\Users\FRC\Documents\cookies.firefox-private.txt"`. The same date-stamped folder is used.
+Pass `-Y` to download with `yt-dlp` instead of ffmpeg. The title is optional in this mode — yt-dlp handles the filename automatically. `yt-dlp` must be on `PATH` or an error is thrown. The command always includes `--ignore-config` and `--cookies "<CurrentUser>\\Documents\\cookies.firefox-private.txt"` (resolved from the current user profile at runtime). The same date-stamped folder is used.
 
 ```pwsh
 qvcp -Y "https://www.youtube.com/watch?v=..."
 ```
 
 If YouTube extraction fails with `nsig`/SABR warnings or only image formats, run `yt-dlp -U` and retry.
+If the cookies file is missing, `qvcp` now fails fast and prints the expected full path.
 
 Drop the copied HLS/DASH URL straight into `qvcp` to build an `mp4` that’s ready for VLC, editing, or archival.
 
