@@ -34,7 +34,10 @@ function qvcp {
             if (-not (Get-Command 'yt-dlp' -ErrorAction SilentlyContinue)) {
                 throw "yt-dlp not found on PATH"
             }
-            & yt-dlp --cookies $ytDlpCookiesPath -P $folder $Url
+            & yt-dlp --ignore-config --cookies $ytDlpCookiesPath -P $folder $Url
+            if ($LASTEXITCODE -ne 0) {
+                throw "yt-dlp failed (exit code $LASTEXITCODE). If YouTube shows nsig/SABR warnings or only image formats, update yt-dlp with 'yt-dlp -U' and try again."
+            }
         }
         else {
             $safeWord   = ($Word -replace '[\\\/\:\*\?\"\<\>\|]', '_').Trim()
