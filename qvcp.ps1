@@ -5,15 +5,12 @@ function qvcp {
         [string]$Word,
 
         [Parameter(ParameterSetName='FFmpeg', Mandatory=$true, Position=1)]
-        [Parameter(ParameterSetName='YouTube', Mandatory=$true, Position=0)]
-        [string]$Url,
+        [Parameter(ParameterSetName='YouTube', Mandatory=$true, Position=0, ValueFromRemainingArguments=$true)]
+        [string[]]$Url,
 
         [Parameter(ParameterSetName='YouTube', Mandatory=$true)]
         [switch]$Y
     )
-
-    $OUTPUT_ROOT = 'X:\in\clips'
-    $YTDLP_COOKIES_FILE = 'cookies.firefox-private.txt'
 
     $originalTitle = $Host.UI.RawUI.WindowTitle
 
@@ -21,7 +18,7 @@ function qvcp {
         $Host.UI.RawUI.WindowTitle = $Word
 
         $now    = Get-Date
-        $folder = Join-Path $OUTPUT_ROOT ('{0:yyyy-MM}' -f $now)
+        $folder = Join-Path 'X:\in\clips' ('{0:yyyy-MM}' -f $now)
 
         if (-not (Test-Path -LiteralPath $folder -PathType Container)) {
             try {
@@ -36,16 +33,8 @@ function qvcp {
             if (-not (Get-Command 'yt-dlp' -ErrorAction SilentlyContinue)) {
                 throw "yt-dlp not found on PATH"
             }
-
-            $documentsPath = [Environment]::GetFolderPath('MyDocuments')
-            $ytDlpCookiesPath = Join-Path $documentsPath $YTDLP_COOKIES_FILE
-            if (-not (Test-Path -LiteralPath $ytDlpCookiesPath -PathType Leaf)) {
-                throw "Cookies file not found: '$ytDlpCookiesPath'"
-            }
-
-            & yt-dlp --ignore-config --cookies $ytDlpCookiesPath -P $folder $Url
-            if ($LASTEXITCODE -ne 0) {
-                throw "yt-dlp failed (exit code $LASTEXITCODE). If YouTube shows nsig/SABR warnings or only image formats, update yt-dlp with 'yt-dlp -U' and try again."
+            foreach ($u in $Url) {
+                & yt-dlp -P $folder $u
             }
         }
         else {
@@ -67,10 +56,10 @@ function qvcp {
             }
 
             & ffmpeg `
-                -i $Url `
+                -i $Url[0] `
                 -c copy `
                 -metadata title="$Word" `
-                -metadata comment="$Url" `
+                -metadata comment="$($Url[0])" `
                 $outputPath
         }
     }

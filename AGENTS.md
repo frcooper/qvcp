@@ -35,9 +35,11 @@ This repo is a small, copy/paste–driven toolkit:
 
 - [qvcp.ps1](qvcp.ps1) defines a function (not a script entrypoint). Typical usage is to load it from your PowerShell profile so `qvcp` is available in every session. Example profile snippet:
   - `if (Test-Path 'C:\tools\qvcp\qvcp.ps1') { . 'C:\tools\qvcp\qvcp.ps1' }`
-  - Then use `qvcp "Label" "https://...m3u8"`
+- **ffmpeg mode** (default): `qvcp "Label" "https://...m3u8"`
+- **YouTube / yt-dlp mode** (`-Y` flag): `qvcp -Y "https://www.youtube.com/watch?v=..."` — yt-dlp must be on `PATH`. Supports multiple URLs: `qvcp -Y "url1" "url2" "url3"` (downloaded sequentially).
 - Output folder is currently hardcoded to `X:\in\clips\YYYY-MM\` and the file name is sanitized; preserve this behavior unless the repo explicitly changes it.
 - `ffmpeg` invocation uses `-c copy` and writes `title` / `comment` metadata.
+- `yt-dlp` mode handles filename and metadata automatically.
 
 ## Docs/versioning
 
