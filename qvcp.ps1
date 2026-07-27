@@ -12,6 +12,8 @@ function qvcp {
         [switch]$Y
     )
 
+    $YTDLP_COOKIES_FILE = 'cookies.firefox-private.txt'
+
     $originalTitle = $Host.UI.RawUI.WindowTitle
 
     try {
@@ -33,8 +35,58 @@ function qvcp {
             if (-not (Get-Command 'yt-dlp' -ErrorAction SilentlyContinue)) {
                 throw "yt-dlp not found on PATH"
             }
+
+            $youtubeHosts = @(
+                'youtube.com',
+                'www.youtube.com',
+                'm.youtube.com',
+                'music.youtube.com',
+                'youtu.be',
+                'www.youtu.be',
+                'youtube-nocookie.com',
+                'www.youtube-nocookie.com'
+            )
+
+            $hasYouTubeUrl = $false
             foreach ($u in $Url) {
-                & yt-dlp -P $folder $u
+                if ([string]::IsNullOrWhiteSpace($u)) {
+                    continue
+                }
+
+                $uri = $null
+                if ([Uri]::TryCreate($u, [UriKind]::Absolute, [ref]$uri) -and $youtubeHosts -contains $uri.Host.ToLowerInvariant()) {
+                    $hasYouTubeUrl = $true
+                    break
+                }
+            }
+
+            $ytDlpCookiesPath = $null
+            if ($hasYouTubeUrl) {
+                $documentsPath = [Environment]::GetFolderPath('MyDocuments')
+                $ytDlpCookiesPath = Join-Path $documentsPath $YTDLP_COOKIES_FILE
+                if (-not (Test-Path -LiteralPath $ytDlpCookiesPath -PathType Leaf)) {
+                    throw "Cookies file not found: '$ytDlpCookiesPath'"
+                }
+            }
+
+            foreach ($u in $Url) {
+                if ([string]::IsNullOrWhiteSpace($u)) {
+                    continue
+                }
+
+                $uri = $null
+                $isYouTube = [Uri]::TryCreate($u, [UriKind]::Absolute, [ref]$uri) -and $youtubeHosts -contains $uri.Host.ToLowerInvariant()
+
+                $ytDlpArgs = @()
+                if ($isYouTube) {
+                    $ytDlpArgs += @('--ignore-config', '--cookies', $ytDlpCookiesPath)
+                }
+                $ytDlpArgs += @('-P', $folder, $u)
+
+                & yt-dlp @ytDlpArgs
+                if ($LASTEXITCODE -ne 0) {
+                    throw "yt-dlp failed for '$u' (exit code $LASTEXITCODE). If YouTube shows nsig/SABR warnings or only image formats, update yt-dlp with 'yt-dlp -U' and try again."
+                }
             }
         }
         else {
