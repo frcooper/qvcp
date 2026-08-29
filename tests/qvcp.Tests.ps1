@@ -36,8 +36,14 @@ BeforeAll {
     $global:QvcpTestOriginalOutputRoot = $env:QVCP_OUTPUT_ROOT
     $env:QVCP_OUTPUT_ROOT = $global:QvcpTestRoot
 
-    $global:QvcpTestMonthFolder = Join-Path $global:QvcpTestRoot ('{0:yyyy-MM}' -f (Get-Date))
     $global:QvcpTestCookiesPath = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'cookies.firefox-private.txt'
+
+    # Recomputed per call rather than fixed at suite start: qvcp derives the
+    # month folder per invocation, so a cached value would go stale if a run
+    # straddled a month boundary.
+    function global:Get-QvcpMonthFolder {
+        Join-Path $global:QvcpTestRoot ('{0:yyyy-MM}' -f (Get-Date))
+    }
 
     # Both stubs record their arguments and the window title as it stood at the
     # moment of the call, which is the only point where the title is observable.
@@ -74,6 +80,7 @@ AfterAll {
     Remove-Item -Path 'function:global:ffmpeg'          -ErrorAction SilentlyContinue
     Remove-Item -Path 'function:global:Get-QvcpArgAfter' -ErrorAction SilentlyContinue
     Remove-Item -Path 'function:global:Reset-QvcpTestState' -ErrorAction SilentlyContinue
+    Remove-Item -Path 'function:global:Get-QvcpMonthFolder' -ErrorAction SilentlyContinue
 
     $env:QVCP_OUTPUT_ROOT = $global:QvcpTestOriginalOutputRoot
 
@@ -82,7 +89,7 @@ AfterAll {
     }
 
     Remove-Variable -Name QvcpTestCalls, QvcpTestTitles, QvcpTestExitCode, QvcpTestRoot,
-        QvcpTestMonthFolder, QvcpTestCookiesPath, QvcpTestOriginalOutputRoot,
+        QvcpTestCookiesPath, QvcpTestOriginalOutputRoot,
         QvcpTestHasCookies, QvcpTestCanSetTitle -Scope Global -ErrorAction SilentlyContinue
 }
 
@@ -124,8 +131,8 @@ Describe 'qvcp -G (generic yt-dlp mode)' {
         qvcp -G 'https://example.com/clip.mp4'
 
         Get-QvcpArgAfter -Arguments $global:QvcpTestCalls[0] -Flag '-P' |
-            Should -Be $global:QvcpTestMonthFolder
-        Test-Path -LiteralPath $global:QvcpTestMonthFolder -PathType Container | Should -BeTrue
+            Should -Be (Get-QvcpMonthFolder)
+        Test-Path -LiteralPath (Get-QvcpMonthFolder) -PathType Container | Should -BeTrue
     }
 
     It 'passes the URL as the final argument' {
@@ -235,22 +242,22 @@ Describe 'qvcp (ffmpeg mode)' {
         $call | Should -Contain 'copy'
         $call | Should -Contain 'title=My Clip'
         $call | Should -Contain 'comment=https://example.com/stream.m3u8'
-        $call[-1] | Should -Be (Join-Path $global:QvcpTestMonthFolder 'My Clip.mp4')
+        $call[-1] | Should -Be (Join-Path (Get-QvcpMonthFolder) 'My Clip.mp4')
     }
 
     It 'sanitizes characters that are illegal in file names' {
         qvcp 'a:b*c?d' 'https://example.com/stream.m3u8'
 
-        $global:QvcpTestCalls[0][-1] | Should -Be (Join-Path $global:QvcpTestMonthFolder 'a_b_c_d.mp4')
+        $global:QvcpTestCalls[0][-1] | Should -Be (Join-Path (Get-QvcpMonthFolder) 'a_b_c_d.mp4')
     }
 
     It 'appends a numeric suffix when the target already exists' {
-        New-Item -ItemType Directory -Path $global:QvcpTestMonthFolder -Force | Out-Null
-        Set-Content -LiteralPath (Join-Path $global:QvcpTestMonthFolder 'Dupe.mp4') -Value '' -NoNewline
+        New-Item -ItemType Directory -Path (Get-QvcpMonthFolder) -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path (Get-QvcpMonthFolder) 'Dupe.mp4') -Value '' -NoNewline
 
         qvcp 'Dupe' 'https://example.com/stream.m3u8'
 
-        $global:QvcpTestCalls[0][-1] | Should -Be (Join-Path $global:QvcpTestMonthFolder 'Dupe-2.mp4')
+        $global:QvcpTestCalls[0][-1] | Should -Be (Join-Path (Get-QvcpMonthFolder) 'Dupe-2.mp4')
     }
 }
 

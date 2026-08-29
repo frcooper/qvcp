@@ -25,7 +25,7 @@ function qvcp {
     # mp4 silently drops non-standard keys such as 'source' unless this muxer
     # flag is set. mkv/webm keep them either way.
     $YTDLP_METADATA_PPA = 'Metadata:-movflags use_metadata_tags'
-    $QVCP_OUTPUT_ROOT   = if ($env:QVCP_OUTPUT_ROOT) { $env:QVCP_OUTPUT_ROOT } else { 'X:\in\clips' }
+    $QVCP_OUTPUT_ROOT   = if ([string]::IsNullOrWhiteSpace($env:QVCP_OUTPUT_ROOT)) { 'X:\in\clips' } else { $env:QVCP_OUTPUT_ROOT }
 
     $originalTitle = $Host.UI.RawUI.WindowTitle
 
@@ -39,7 +39,7 @@ function qvcp {
 
         if (-not (Test-Path -LiteralPath $folder -PathType Container)) {
             try {
-                New-Item -ItemType Directory -Path $folder -Force -ErrorAction Stop | Out-Null
+                [void][System.IO.Directory]::CreateDirectory($folder)
             }
             catch {
                 throw "Unable to access output folder '$folder' : $_"
