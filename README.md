@@ -55,7 +55,52 @@ You can pass multiple URLs and they will be downloaded sequentially:
 qvcp -Y "https://www.youtube.com/watch?v=abc" "https://www.youtube.com/watch?v=def"
 ```
 
+Cookies are only attached to YouTube URLs; anything else in the list is fetched without them.
+
+Both yt-dlp modes run `--embed-metadata`, so the video's own title is written into the file, and record the origin URL twice — as a dedicated `source` tag for machines, and inside `comment` as `<>SourceURL::<url><>` for anything that only surfaces the comment field:
+
+```
+TAG:title=sample-5s
+TAG:source=https://samplelib.com/mp4/sample-5s.mp4
+TAG:comment=<>SourceURL::https://samplelib.com/mp4/sample-5s.mp4<>
+```
+
+The URL is the per-video `webpage_url`, so playlist entries each get their own. Read the field back with `ffprobe -show_entries format_tags=source -of default=nw=1 <file>`.
+
+Note that mp4 **silently discards** non-standard keys such as `source` unless the muxer is given `-movflags use_metadata_tags`, which qvcp passes through `--postprocessor-args`. Matroska and WebM keep arbitrary tags without it. There is no metadata field for "origin URL" that is standard across containers — the nearest are ID3v2 `WOAS` (audio only), Dublin Core `dc:source` via XMP (which ffmpeg cannot write), and the iTunes `purl` atom (mp4 only) — hence the belt-and-braces approach.
+
+### Generic / yt-dlp mode (`-G`)
+
+Pass `-G` (alias `-Generic`) to download with `yt-dlp` while explicitly **not** sending any cookies. Use it for public videos, for non-YouTube sites, or whenever you would rather not tie the download to your signed-in account. Multiple URLs work the same way as with `-Y`.
+
+```pwsh
+qvcp -G "https://www.youtube.com/watch?v=..."
+qvcp -G "https://example.com/a.mp4" "https://example.com/b.mp4"
+```
+
+`-G` runs yt-dlp with `--ignore-config --no-cookies --no-cookies-from-browser`, so neither the cookies file nor anything in your personal `yt-dlp.conf` can slip a session in. Because `--ignore-config` also discards your own format and output-template preferences, `-G` downloads use yt-dlp's defaults.
+
+`-Y` and `-G` are mutually exclusive — passing both is a parameter-binding error. If a `-G` download fails on a sign-in wall, retry it with `-Y`.
+
+### Output folder
+
+The output root defaults to `X:\in\clips` and the month folder is appended automatically. Set `QVCP_OUTPUT_ROOT` to redirect it (the test suite uses this to keep out of your real clips folder):
+
+```pwsh
+$env:QVCP_OUTPUT_ROOT = 'D:\clips'
+```
+
 Drop the copied HLS/DASH URL straight into `qvcp` to build an `mp4` that’s ready for VLC, editing, or archival.
+
+### Tests
+
+The PowerShell helper has a [Pester](https://pester.dev) suite in [tests/](tests/). It stubs out `yt-dlp` / `ffmpeg` and asserts on the argument lists, so nothing is downloaded and no real files are written.
+
+```pwsh
+./tests/run-tests.ps1
+```
+
+Requires Pester 5+ (`Install-Module Pester -MinimumVersion 5.0.0 -Scope CurrentUser -Force -SkipPublisherCheck`). The suite also runs on Windows in CI via [.github/workflows/tests.yml](.github/workflows/tests.yml).
 
 ## How it decides “best”
 

@@ -15,7 +15,7 @@ This repo is a small, copy/paste–driven toolkit:
 
 ## Workflow
 
-- No build system / tests: edit the `.js` / `.ps1` files directly.
+- No build system. Edit the `.js` / `.ps1` files directly. The PowerShell helper has a Pester suite (see **Tests** below); the userscripts do not.
 - When changing stream selection logic, keep both JS implementations functionally aligned:
   - URL detection (`isHLS` / `isDASH`) and normalization (`absURL`).
   - Upgrade logic (`upgradeToBest`, `pickBestFromHLSMaster`, `pickBestFromMPD`).
@@ -36,10 +36,24 @@ This repo is a small, copy/paste–driven toolkit:
 - [qvcp.ps1](qvcp.ps1) defines a function (not a script entrypoint). Typical usage is to load it from your PowerShell profile so `qvcp` is available in every session. Example profile snippet:
   - `if (Test-Path 'C:\tools\qvcp\qvcp.ps1') { . 'C:\tools\qvcp\qvcp.ps1' }`
 - **ffmpeg mode** (default): `qvcp "Label" "https://...m3u8"`
-- **YouTube / yt-dlp mode** (`-Y` flag): `qvcp -Y "https://www.youtube.com/watch?v=..."` — yt-dlp must be on `PATH`. Supports multiple URLs: `qvcp -Y "url1" "url2" "url3"` (downloaded sequentially).
-- Output folder is currently hardcoded to `X:\in\clips\YYYY-MM\` and the file name is sanitized; preserve this behavior unless the repo explicitly changes it.
+- **YouTube / yt-dlp mode** (`-Y` flag): `qvcp -Y "https://www.youtube.com/watch?v=..."` — yt-dlp must be on `PATH`. Supports multiple URLs: `qvcp -Y "url1" "url2" "url3"` (downloaded sequentially). Cookies (`--cookies`) are attached only to URLs whose host is in `$youtubeHosts`.
+- **Generic / yt-dlp mode** (`-G` flag, alias `-Generic`): same download path, but never sends cookies — runs yt-dlp with `--ignore-config --no-cookies --no-cookies-from-browser`. The cookies file is never resolved or validated in this mode. `-Y` and `-G` live in separate parameter sets, so PowerShell rejects both at once; do not add a manual guard.
+- Only set the terminal title when `$Word` is bound. `$Word` belongs to the `FFmpeg` parameter set only, so `-Y` / `-G` must leave the title untouched.
+- Output folder defaults to `X:\in\clips\YYYY-MM\`, overridable via `$env:QVCP_OUTPUT_ROOT` (the tests rely on this). The file name is sanitized; preserve this behavior unless the repo explicitly changes it.
 - `ffmpeg` invocation uses `-c copy` and writes `title` / `comment` metadata.
-- `yt-dlp` mode handles filename and metadata automatically.
+- `yt-dlp` modes handle the filename automatically and run `--embed-metadata` (video title) plus two `--parse-metadata` rules that write the origin URL to both a `source` tag and `comment` as `<>SourceURL::%(webpage_url)s<>`. Keep both: `source` is for machines, `comment` for players that only show that field.
+- Colons inside a `--parse-metadata` FROM half must stay escaped as `\:` — yt-dlp splits FROM:TO on the first unescaped colon.
+- `--postprocessor-args 'Metadata:-movflags use_metadata_tags'` is required, not optional: the mp4 muxer silently drops non-standard keys (`source`, and yt-dlp's own `purl`) without it. mkv/webm keep them regardless. Do not remove it when touching the metadata args.
+- ffmpeg mode still writes the bare URL as `comment`, not the `<>SourceURL::...<>` form.
+
+## Tests
+
+- [tests/qvcp.Tests.ps1](tests/qvcp.Tests.ps1) is a Pester 5+ suite covering the PowerShell helper; run it with [tests/run-tests.ps1](tests/run-tests.ps1). CI: [.github/workflows/tests.yml](.github/workflows/tests.yml).
+- The suite shadows `yt-dlp` / `ffmpeg` with global stub **functions** (PowerShell resolves functions before applications) and asserts on the recorded argument arrays — nothing is downloaded.
+- Stubs also record `$Host.UI.RawUI.WindowTitle` at call time, which is the only point where the title is observable from outside.
+- `-Skip:` is evaluated during Pester discovery, so anything a skip condition depends on must be probed in `BeforeDiscovery`, not `BeforeAll`. Pester rejects a `BeforeEach` at the container root; each `Describe` calls `Reset-QvcpTestState` instead.
+- Tests must not write to the real `X:\in\clips` or the user's Documents folder. Cookie-dependent tests skip based on whether `cookies.firefox-private.txt` already exists.
+- The JS files have no test coverage; keep verifying those by hand in the browser.
 
 ## Docs/versioning
 
