@@ -21,10 +21,11 @@ function qvcp {
     # FROM:TO for yt-dlp --parse-metadata. Colons in FROM must be escaped; the
     # split is on the first unescaped one.
     $YTDLP_COMMENT_RULE = '<>SourceURL\:\:%(webpage_url)s<>:%(meta_comment)s'
+    # mp4 silently drops non-standard keys such as 'source'; mkv/webm keep them.
+    # Do NOT try to rescue this with -movflags use_metadata_tags: that switches
+    # the mov muxer to the mdta/keys mechanism for *all* tags, so the standard
+    # atoms (title, comment) disappear and players show nothing at all.
     $YTDLP_SOURCE_RULE  = '%(webpage_url)s:%(meta_source)s'
-    # mp4 silently drops non-standard keys such as 'source' unless this muxer
-    # flag is set. mkv/webm keep them either way.
-    $YTDLP_METADATA_PPA = 'Metadata:-movflags use_metadata_tags'
     $QVCP_OUTPUT_ROOT   = if ([string]::IsNullOrWhiteSpace($env:QVCP_OUTPUT_ROOT)) { 'X:\in\clips' } else { $env:QVCP_OUTPUT_ROOT }
 
     $originalTitle = $Host.UI.RawUI.WindowTitle
@@ -109,8 +110,7 @@ function qvcp {
                 $ytDlpArgs += @(
                     '--embed-metadata',
                     '--parse-metadata', $YTDLP_COMMENT_RULE,
-                    '--parse-metadata', $YTDLP_SOURCE_RULE,
-                    '--postprocessor-args', $YTDLP_METADATA_PPA
+                    '--parse-metadata', $YTDLP_SOURCE_RULE
                 )
                 $ytDlpArgs += @('-P', $folder, $u)
 

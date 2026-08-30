@@ -57,17 +57,19 @@ qvcp -Y "https://www.youtube.com/watch?v=abc" "https://www.youtube.com/watch?v=d
 
 Cookies are only attached to YouTube URLs; anything else in the list is fetched without them.
 
-Both yt-dlp modes run `--embed-metadata`, so the video's own title is written into the file, and record the origin URL twice — as a dedicated `source` tag for machines, and inside `comment` as `<>SourceURL::<url><>` for anything that only surfaces the comment field:
+Both yt-dlp modes run `--embed-metadata`, so the video's own title, artist, and description are written into the file, and the origin URL is recorded in `comment` as `<>SourceURL::<url><>`:
 
 ```
-TAG:title=sample-5s
-TAG:source=https://samplelib.com/mp4/sample-5s.mp4
-TAG:comment=<>SourceURL::https://samplelib.com/mp4/sample-5s.mp4<>
+TAG:title=4k JING SONG ...
+TAG:artist=Cerberus_Fancam
+TAG:comment=<>SourceURL::https://www.youtube.com/watch?v=SDD-DqtfQ1k<>
 ```
 
-The URL is the per-video `webpage_url`, so playlist entries each get their own. Read the field back with `ffprobe -show_entries format_tags=source -of default=nw=1 <file>`.
+The URL is the per-video `webpage_url`, so playlist entries each get their own. A dedicated `source` tag is also requested; **mkv/webm keep it, mp4 silently drops it**, because mp4 has no slot for arbitrary keys. That is why the sigil in `comment` is the primary mechanism — `comment` is the one field every container and player supports.
 
-Note that mp4 **silently discards** non-standard keys such as `source` unless the muxer is given `-movflags use_metadata_tags`, which qvcp passes through `--postprocessor-args`. Matroska and WebM keep arbitrary tags without it. There is no metadata field for "origin URL" that is standard across containers — the nearest are ID3v2 `WOAS` (audio only), Dublin Core `dc:source` via XMP (which ffmpeg cannot write), and the iTunes `purl` atom (mp4 only) — hence the belt-and-braces approach.
+> **Do not add `-movflags use_metadata_tags` to rescue the `source` tag on mp4.** It does not add a key alongside the standard atoms — it switches the mov muxer to the `mdta`/`keys` mechanism for *every* tag, so `©nam` and `©cmt` disappear. `ffprobe` still reads the file fine, which makes this look like it works, but VLC, Windows Media Player, and Explorer show no metadata at all.
+
+There is no metadata field for "origin URL" that is standard across containers — the nearest are ID3v2 `WOAS` (audio only), Dublin Core `dc:source` via XMP (which ffmpeg cannot write), and the iTunes `purl` atom (mp4 only).
 
 ### Generic / yt-dlp mode (`-G`)
 
