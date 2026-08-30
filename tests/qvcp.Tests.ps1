@@ -171,9 +171,11 @@ Describe 'qvcp -G (generic yt-dlp mode)' {
         $call | Should -Contain '--embed-metadata'
         $call | Should -Contain '<>SourceURL\:\:%(webpage_url)s<>:%(meta_comment)s'
         $call | Should -Contain '%(webpage_url)s:%(meta_source)s'
-        # mp4 drops the 'source' key without this muxer flag.
-        $call | Should -Contain 'Metadata:-movflags use_metadata_tags'
         ($call | Where-Object { $_ -eq '--parse-metadata' }).Count | Should -Be 2
+        # Regression guard: use_metadata_tags moves every tag to mdta/keys, so
+        # the standard mp4 atoms vanish and players show no metadata at all.
+        $call | Should -Not -Contain '--postprocessor-args'
+        $call -join ' ' | Should -Not -Match 'use_metadata_tags'
     }
 
     It 'stops on the first failing URL' {
@@ -216,9 +218,11 @@ Describe 'qvcp -Y (YouTube mode)' {
         $call | Should -Contain '--embed-metadata'
         $call | Should -Contain '<>SourceURL\:\:%(webpage_url)s<>:%(meta_comment)s'
         $call | Should -Contain '%(webpage_url)s:%(meta_source)s'
-        # mp4 drops the 'source' key without this muxer flag.
-        $call | Should -Contain 'Metadata:-movflags use_metadata_tags'
         ($call | Where-Object { $_ -eq '--parse-metadata' }).Count | Should -Be 2
+        # Regression guard: use_metadata_tags moves every tag to mdta/keys, so
+        # the standard mp4 atoms vanish and players show no metadata at all.
+        $call | Should -Not -Contain '--postprocessor-args'
+        $call -join ' ' | Should -Not -Match 'use_metadata_tags'
     }
 
     It 'keeps the yt-dlp -U hint on failure' {
