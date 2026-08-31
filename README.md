@@ -57,15 +57,17 @@ qvcp -Y "https://www.youtube.com/watch?v=abc" "https://www.youtube.com/watch?v=d
 
 Cookies are only attached to YouTube URLs; anything else in the list is fetched without them.
 
-Both yt-dlp modes run `--embed-metadata`, so the video's own title, artist, and description are written into the file, and the origin URL is recorded in `comment` as `<>SourceURL::<url><>`:
+Both yt-dlp modes run `--embed-metadata`, so the video's own title, artist, and description are written into the file, and the origin URL is recorded in `comment` as `[[SourceURL|<url>]]`:
 
 ```
 TAG:title=4k JING SONG ...
 TAG:artist=Cerberus_Fancam
-TAG:comment=<>SourceURL::https://www.youtube.com/watch?v=SDD-DqtfQ1k<>
+TAG:comment=[[SourceURL|https://www.youtube.com/watch?v=SDD-DqtfQ1k]]
 ```
 
 The URL is the per-video `webpage_url`, so playlist entries each get their own. A dedicated `source` tag is also requested; **mkv/webm keep it, mp4 silently drops it**, because mp4 has no slot for arbitrary keys. That is why the sigil in `comment` is the primary mechanism — `comment` is the one field every container and player supports.
+
+The sigil is built to be trivially parseable: `|` cannot appear unencoded in a URL (RFC 3986), so a plain split works and no regex is required. It also contains no colon, which is why the `--parse-metadata` rule needs no escaping. Extract it with `[[SourceURL\|(.*?)]]`.
 
 > **Do not add `-movflags use_metadata_tags` to rescue the `source` tag on mp4.** It does not add a key alongside the standard atoms — it switches the mov muxer to the `mdta`/`keys` mechanism for *every* tag, so `©nam` and `©cmt` disappear. `ffprobe` still reads the file fine, which makes this look like it works, but VLC, Windows Media Player, and Explorer show no metadata at all.
 
