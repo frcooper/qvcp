@@ -41,11 +41,11 @@ This repo is a small, copy/paste–driven toolkit:
 - Only set the terminal title when `$Word` is bound. `$Word` belongs to the `FFmpeg` parameter set only, so `-Y` / `-G` must leave the title untouched.
 - Output folder defaults to `X:\in\clips\YYYY-MM\`, overridable via `$env:QVCP_OUTPUT_ROOT` (the tests rely on this). The file name is sanitized; preserve this behavior unless the repo explicitly changes it.
 - `ffmpeg` invocation uses `-c copy` and writes `title` / `comment` metadata.
-- `yt-dlp` modes handle the filename automatically and run `--embed-metadata` (video title) plus two `--parse-metadata` rules that write the origin URL to both a `source` tag and `comment` as `<>SourceURL::%(webpage_url)s<>`. Keep both: `source` is for machines, `comment` for players that only show that field.
+- `yt-dlp` modes handle the filename automatically and run `--embed-metadata` (video title) plus two `--parse-metadata` rules that write the origin URL to both a `source` tag and `comment` as `[[SourceURL|%(webpage_url)s]]`. Keep both: `source` is for machines, `comment` for players that only show that field.
 - Colons inside a `--parse-metadata` FROM half must stay escaped as `\:` — yt-dlp splits FROM:TO on the first unescaped colon.
 - **Never pass `-movflags use_metadata_tags`.** It looks like the fix for mp4 dropping the non-standard `source` key, and `ffprobe` confirms the key is there — but it switches the mov muxer to the `mdta`/`keys` mechanism for every tag, so the standard `©nam`/`©cmt` atoms are never written and real players (VLC, WMP, Explorer) show nothing. There is a regression guard for this in the test suite; verify metadata changes by inspecting atoms, not with `ffprobe` alone.
-- The `source` tag therefore survives only in mkv/webm. `comment` is the portable carrier, which is what the `<>SourceURL::...<>` sigil is for.
-- ffmpeg mode still writes the bare URL as `comment`, not the `<>SourceURL::...<>` form.
+- The `source` tag therefore survives only in mkv/webm. `comment` is the portable carrier, which is what the `[[SourceURL|...]]` sigil is for. It avoids ':' so the `--parse-metadata` rule needs no escaping, avoids '<>' so it survives being rendered as HTML, and uses '|' because that cannot appear unencoded in a URL.
+- ffmpeg mode still writes the bare URL as `comment`, not the `[[SourceURL|...]]` form.
 
 ## Tests
 

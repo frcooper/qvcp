@@ -169,7 +169,7 @@ Describe 'qvcp -G (generic yt-dlp mode)' {
 
         $call = $global:QvcpTestCalls[0]
         $call | Should -Contain '--embed-metadata'
-        $call | Should -Contain '<>SourceURL\:\:%(webpage_url)s<>:%(meta_comment)s'
+        $call | Should -Contain '[[SourceURL|%(webpage_url)s]]:%(meta_comment)s'
         $call | Should -Contain '%(webpage_url)s:%(meta_source)s'
         ($call | Where-Object { $_ -eq '--parse-metadata' }).Count | Should -Be 2
         # Regression guard: use_metadata_tags moves every tag to mdta/keys, so
@@ -216,7 +216,7 @@ Describe 'qvcp -Y (YouTube mode)' {
 
         $call = $global:QvcpTestCalls[0]
         $call | Should -Contain '--embed-metadata'
-        $call | Should -Contain '<>SourceURL\:\:%(webpage_url)s<>:%(meta_comment)s'
+        $call | Should -Contain '[[SourceURL|%(webpage_url)s]]:%(meta_comment)s'
         $call | Should -Contain '%(webpage_url)s:%(meta_source)s'
         ($call | Where-Object { $_ -eq '--parse-metadata' }).Count | Should -Be 2
         # Regression guard: use_metadata_tags moves every tag to mdta/keys, so

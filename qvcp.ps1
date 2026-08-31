@@ -18,9 +18,10 @@ function qvcp {
     )
 
     $YTDLP_COOKIES_FILE = 'cookies.firefox-private.txt'
-    # FROM:TO for yt-dlp --parse-metadata. Colons in FROM must be escaped; the
-    # split is on the first unescaped one.
-    $YTDLP_COMMENT_RULE = '<>SourceURL\:\:%(webpage_url)s<>:%(meta_comment)s'
+    # FROM:TO for yt-dlp --parse-metadata, split on the first unescaped colon.
+    # The sigil deliberately contains no colon, so nothing here needs escaping,
+    # and '|' cannot appear unencoded in a URL, so splitting on it is safe.
+    $YTDLP_COMMENT_RULE = '[[SourceURL|%(webpage_url)s]]:%(meta_comment)s'
     # mp4 silently drops non-standard keys such as 'source'; mkv/webm keep them.
     # Do NOT try to rescue this with -movflags use_metadata_tags: that switches
     # the mov muxer to the mdta/keys mechanism for *all* tags, so the standard
@@ -116,13 +117,16 @@ function qvcp {
 
                 & yt-dlp @ytDlpArgs
                 if ($LASTEXITCODE -ne 0) {
-                    $hint = if ($G) {
-                        "Generic mode never sends cookies; if the site requires a sign-in, use -Y instead."
+                    # Tie each hint to the symptom that warrants it. yt-dlp exits 1
+                    # for everything, so asserting a single cause here misleads.
+                    $hints = @(
+                        "  * 'Postprocessing' / 'No such file or directory': the target file is locked or unreadable. A player or Explorer may still hold it open, and on a network share a deleted-but-open file lingers in the listing. Close it and retry."
+                        "  * nsig/SABR warnings, or only image formats offered: update with 'yt-dlp -U'."
+                    )
+                    if ($G) {
+                        $hints += "  * Sign-in required: generic mode sends no cookies, so use -Y instead."
                     }
-                    else {
-                        "If YouTube shows nsig/SABR warnings or only image formats, update yt-dlp with 'yt-dlp -U' and try again."
-                    }
-                    throw "yt-dlp failed for '$u' (exit code $LASTEXITCODE). $hint"
+                    throw ("yt-dlp failed for '$u' (exit code $LASTEXITCODE). Check the yt-dlp output above:`n" + ($hints -join "`n"))
                 }
             }
         }
