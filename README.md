@@ -131,14 +131,13 @@ The resolution check queries **without cookies** first, one `yt-dlp -j` call per
 
 `ytup.ps1` defines `ytup`, which updates everything the two tools above depend on, in one go:
 
-1. **yt-dlp** via `winget upgrade --id yt-dlp.yt-dlp.nightly`. A copy that has since self-updated with `yt-dlp -U` fails winget's modified-file check; `ytup` spots that and retries with `--force`. Pass `-Also C:\path\yt-dlp.exe` for copies winget does not manage — those get `-U`.
+1. **yt-dlp** via `winget upgrade --id yt-dlp.yt-dlp.nightly`. A copy that has since self-updated with `yt-dlp -U` fails winget's modified-file check; `ytup` spots that and retries with `--force`.
 2. **PO token provider** — the latest [bgutil-ytdlp-pot-provider](https://github.com/Brainicism/bgutil-ytdlp-pot-provider) release tag is checked out under `~\bgutil-ytdlp-pot-provider` (cloned on first run) and its Deno dependencies installed. That folder is the plugin's default `server_home`, so yt-dlp finds it with no extra arguments.
 3. **Provider plugin** — the matching plugin zip from the same release replaces `%APPDATA%\yt-dlp\plugins\bgutil-ytdlp-pot-provider.zip`.
 
 ```pwsh
 ytup                              # everything
 ytup -SkipProvider                # yt-dlp only
-ytup -Also C:\Tools\yt-dlp.exe    # plus a second, non-winget copy
 ```
 
 A failing step does not stop the others; one error at the end lists what failed, and a version table shows where things ended up. The provider's two halves are versioned together — `ytup` reads the version back out of the downloaded zip and warns if it disagrees with the release tag.

@@ -11,8 +11,7 @@ function ytup {
 
         1. yt-dlp: 'winget upgrade' on the nightly package. A copy that has
            since self-updated with 'yt-dlp -U' fails winget's modified-file
-           check, so that case is retried with --force. Extra yt-dlp
-           executables named in -Also are self-updated with '-U'.
+           check, so that case is retried with --force.
         2. Provider: the latest bgutil-ytdlp-pot-provider release tag is
            checked out under -ProviderHome (cloned if absent) and its Deno
            dependencies installed.
@@ -24,10 +23,6 @@ function ytup {
         Update everything and print the resulting versions.
 
     .EXAMPLE
-        ytup -Also C:\Tools\yt-dlp.exe
-        Also self-update a second yt-dlp copy that lives outside winget.
-
-    .EXAMPLE
         ytup -SkipProvider
         yt-dlp only.
     #>
@@ -35,10 +30,6 @@ function ytup {
     param(
         # winget package id for yt-dlp.
         [string]$WingetId = 'yt-dlp.yt-dlp.nightly',
-
-        # Further yt-dlp executables to self-update with '-U', for copies
-        # that winget does not manage.
-        [string[]]$Also = @(),
 
         # Checkout of Brainicism/bgutil-ytdlp-pot-provider. This default is
         # the plugin's default server_home, so no extractor args are needed.
@@ -94,19 +85,6 @@ function ytup {
             }
             if (Get-Command 'yt-dlp' -ErrorAction SilentlyContinue) {
                 $versions['yt-dlp'] = (& yt-dlp --version 2>&1 | Select-Object -First 1)
-            }
-        }
-
-        foreach ($exe in $Also) {
-            Step "yt-dlp ($exe)" {
-                if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
-                    throw "not found"
-                }
-                & $exe -U 2>&1 | ForEach-Object { "$_" } | Write-Host
-                if ($LASTEXITCODE -ne 0) {
-                    throw "yt-dlp -U exited $LASTEXITCODE"
-                }
-                $versions[$exe] = (& $exe --version 2>&1 | Select-Object -First 1)
             }
         }
     }
