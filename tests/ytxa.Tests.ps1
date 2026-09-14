@@ -469,6 +469,7 @@ Describe 'ytxa resolution check' {
 
         $global:YtxaYtDlpCalls.Count | Should -Be 1
         $rows[0].ResStatus | Should -Be 'OK'
+        $rows[0].Note      | Should -BeNullOrEmpty   # the caller asked for cookies; no caveat
     }
 
     It 'leaves sign-in failures Unavailable when there is no cookies file' -Skip:$global:YtxaHasCookies {
@@ -573,6 +574,7 @@ Describe 'ytxa -Upgrade' {
         $row.UpgradeStatus | Should -Be 'Failed'
         $row.Note          | Should -Match 'exit code 1'
         $row.NewPath       | Should -BeNullOrEmpty
+        $global:YtxaQvcpCalls.Count | Should -Be 1
         Test-Path -LiteralPath $old | Should -BeTrue
         (Get-Item -LiteralPath $old).Length | Should -Be 0   # the original placeholder, not the stub's 'new'
         Test-Path -LiteralPath "$old.ytxa-old" | Should -BeFalse
@@ -600,6 +602,37 @@ Describe 'ytxa -Upgrade' {
         $row.UpgradeStatus | Should -Be 'Upgraded'
         $row.NewPath       | Should -BeLike '*renamed title [[]aaaaaaaaaaa[]].mkv'
         Test-Path -LiteralPath $old | Should -BeFalse
+    }
+
+    It 'keeps the earlier note alongside the failure reason' -Skip:(-not $global:YtxaHasCookies) {
+        New-YtxaFile 'gated [aaaaaaaaaaa].mp4' -Width 1280 -Height 720 | Out-Null
+        $global:YtxaGated = @('aaaaaaaaaaa')
+        $global:YtxaFormats['aaaaaaaaaaa'] = 1080
+        $global:YtxaQvcpFails = @('aaaaaaaaaaa')
+
+        $row = @(ytxa $global:YtxaRoot -Upgrade -WarningAction SilentlyContinue 6>$null)[0]
+
+        $row.Note | Should -Match 'exit code 1'
+        $row.Note | Should -Match 'before the upgrade: resolved with cookies'
+    }
+
+    It 'fails the row without downloading when the old file cannot be moved aside' {
+        $old = New-YtxaFile 'locked [aaaaaaaaaaa].mp4' -Width 1280 -Height 720
+        $global:YtxaFormats['aaaaaaaaaaa'] = 1080
+
+        $handle = [System.IO.File]::Open($old, 'Open', 'Read', 'None')   # exclusive: Move-Item must fail
+        try {
+            $row = @(ytxa $global:YtxaRoot -Upgrade -WarningAction SilentlyContinue 6>$null)[0]
+        }
+        finally {
+            $handle.Dispose()
+        }
+
+        $row.UpgradeStatus | Should -Be 'Failed'
+        $row.NewPath       | Should -BeNullOrEmpty
+        $global:YtxaQvcpCalls.Count | Should -Be 0
+        Test-Path -LiteralPath $old | Should -BeTrue
+        Test-Path -LiteralPath "$old.ytxa-old" | Should -BeFalse
     }
 
     It 'continues with the next file after a failure' {

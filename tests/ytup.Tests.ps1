@@ -16,7 +16,7 @@ BeforeAll {
 
     function global:winget {
         $global:YtupCalls += , (@('winget') + [string[]]$args)
-        $global:LASTEXITCODE = 0
+        $global:LASTEXITCODE = $global:YtupWingetExit
         # First call answers with $YtupWingetFirst, later calls with $YtupWingetThen.
         if ((Get-YtupCalls 'winget').Count -eq 1) { $global:YtupWingetFirst } else { $global:YtupWingetThen }
     }
@@ -49,6 +49,7 @@ BeforeAll {
         $global:YtupCalls       = @()
         $global:YtupWingetFirst = 'Successfully installed'
         $global:YtupWingetThen  = 'Successfully installed'
+        $global:YtupWingetExit  = 0
         $global:YtupGitExit     = 0
         $global:YtupDenoCwd     = $null
         $global:YtupHome        = Join-Path $global:YtupRoot 'provider'
@@ -99,7 +100,7 @@ AfterAll {
     if ($global:YtupRoot -and (Test-Path -LiteralPath $global:YtupRoot)) {
         Remove-Item -LiteralPath $global:YtupRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
-    Remove-Variable -Name YtupRoot, YtupCalls, YtupWingetFirst, YtupWingetThen, YtupGitExit,
+    Remove-Variable -Name YtupRoot, YtupCalls, YtupWingetFirst, YtupWingetThen, YtupWingetExit, YtupGitExit,
         YtupDenoCwd, YtupHome, YtupPlugins -Scope Global -ErrorAction SilentlyContinue
 }
 
@@ -132,6 +133,14 @@ Describe 'ytup' {
             $calls = Get-YtupCalls 'winget'
             $calls.Count | Should -Be 2
             $calls[1] | Should -Contain '--force'
+        }
+
+        It 'fails when winget prints a success phrase but exits non-zero' {
+            $global:YtupWingetFirst = 'Successfully installed'
+            $global:YtupWingetExit  = 1
+
+            { ytup -ProviderHome $global:YtupHome -PluginDir $global:YtupPlugins -WarningAction SilentlyContinue 6>$null } |
+                Should -Throw -ExpectedMessage '*winget did not report success (exit code 1)*'
         }
 
         It 'treats "no available upgrade" as success' {
@@ -198,6 +207,24 @@ Describe 'ytup' {
             Test-Path -LiteralPath $zip -PathType Leaf | Should -BeTrue
             Should -Invoke Invoke-WebRequest -Times 1 -Exactly -ParameterFilter { $Uri -like '*/2.0.0/bgutil-ytdlp-pot-provider.zip' }
             Get-YtupPluginVersion -ZipPath $zip | Should -Be '2.0.0'
+        }
+
+        It 'fails the plugin step when the zip version disagrees with the release tag' {
+            Mock Invoke-WebRequest { New-YtupPluginZip -Path $OutFile -Version '1.9.9' }
+
+            { ytup -SkipYtDlp -ProviderHome $global:YtupHome -PluginDir $global:YtupPlugins -WarningAction SilentlyContinue 6>$null } |
+                Should -Throw -ExpectedMessage "*plugin zip is version '1.9.9' but the release tag is '2.0.0'*"
+        }
+
+        It 'only warns when the zip carries no readable version' {
+            Mock Invoke-WebRequest {
+                Add-Type -AssemblyName System.IO.Compression.FileSystem
+                $zip = [System.IO.Compression.ZipFile]::Open($OutFile, [System.IO.Compression.ZipArchiveMode]::Create)
+                try { $zip.CreateEntry('yt_dlp_plugins/extractor/other.py') | Out-Null } finally { $zip.Dispose() }
+            }
+
+            { ytup -SkipYtDlp -ProviderHome $global:YtupHome -PluginDir $global:YtupPlugins -WarningVariable w -WarningAction SilentlyContinue 6>$null } |
+                Should -Not -Throw
         }
 
         It 'skips checkout and plugin when the release lookup fails' {
