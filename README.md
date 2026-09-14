@@ -35,7 +35,7 @@ For playback, VLC can open the same URL.
 qvcp "Show • Episode 12" "https://example.com/path/to/master.m3u8?token=..."
 ```
 
-- Saves into `X:\in\clips\YYYY-MM\` (auto-creates the month folder).
+- Saves into `X:\in\clips\YYYY-MM\` (auto-creates the month folder); `-OutDir <folder>` overrides that for one call.
 - Sanitizes the label for filenames and appends `-1`, `-2`, … if a duplicate exists.
 - Runs `ffmpeg -c copy` so the stream is remuxed without re-encoding.
 - Records the title and original URL as `title` / `comment` metadata tags.
@@ -111,6 +111,7 @@ ytxa '.\Some Clip [LY5YF8LgHy0].mp4'        # one file
 ytxa D:\clips\*Girls* *.mkv                 # filespecs, matched recursively
 ytxa -MissingSourceUrl -NoResolutionCheck   # offline: files whose id is only in the name
 ytxa | Where-Object ResStatus -eq Upgrade | Select-Object Path, Res, BestRes
+ytxa D:\clips\2026-07 -Upgrade             # re-download the upgradable ones in place
 ```
 
 Each path may be a folder (scanned recursively), a single file, or a filespec; a filespec is matched recursively below its folder part, so `D:\clips\*.mkv` finds every mkv under `D:\clips`. Several paths can be given and each file is reported once.
@@ -124,6 +125,8 @@ One object per file is emitted, so the result can be filtered, sorted, or export
 | `Id` | The id from the filename. |
 | `SourceUrl`, `SourceUrlStatus` | The URL inside the comment sigil; `OK` when it names the same id, `Mismatch` when it names a different one, `Missing` when there is no sigil (a comment without the `[[SourceURL\|...]]` wrapper still counts as missing). mkv's upper-case `COMMENT` tag is read too. |
 | `Res`, `BestRes`, `ResStatus` | The file's resolution and the best YouTube offers now, measured as yt-dlp ranks it — the smaller of width and height, so a 1080×1920 portrait file is `1080`. `Upgrade` when `BestRes` is larger, `OK` otherwise, `Unavailable` when yt-dlp could not resolve the id (the reason lands in `Note`), `Skipped` under `-NoResolutionCheck`, `NoVideo` when ffprobe could not read the file. |
+
+**`-Upgrade`** acts on the result: every file marked `Upgrade` is re-downloaded through `qvcp` into its *own* folder (`-Y` when the cookies file exists, `-G` otherwise), so an old clip in `2026-07` is replaced in `2026-07`, not copied into this month. The old file is moved aside first — yt-dlp refuses to overwrite a same-named file — and deleted only once a new file carrying the same `[id]` has appeared; if the download fails the old file is put back and the row is marked `UpgradeStatus: Failed` with the reason in `Note`. Success sets `UpgradeStatus: Upgraded` and `NewPath` (the title or container may have changed upstream). `qvcp` must be loaded in the session, and `-NoResolutionCheck` is refused since there would be nothing to act on.
 
 The resolution check queries **without cookies** first, one `yt-dlp -j` call per `-BatchSize` (20) ids and nothing is downloaded. That is deliberate: signed-in clients are SABR-restricted and under-report the ladder (see above), so the anonymous answer is the honest "best available". Ids that YouTube refuses without a sign-in ("Sign in to confirm your age", private, members-only) are then retried with the qvcp cookies file if it exists; rows resolved that way carry `Note: resolved with cookies; the ladder may be under-reported`. Pass `-UseCookies` to skip the anonymous pass and query everything signed-in. Untagged files are checked by their filename id, which is what makes `-MissingSourceUrl` useful without `-NoResolutionCheck`: it tells you both that the tag is absent and whether the file is worth re-downloading. A one-line summary goes to the information stream (`6>$null` to silence it), not the pipeline.
 

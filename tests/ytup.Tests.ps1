@@ -94,7 +94,7 @@ BeforeAll {
 
 AfterAll {
     foreach ($name in 'winget', 'git', 'deno', 'yt-dlp', 'Reset-YtupState', 'Get-YtupCalls', 'New-YtupPluginZip', 'New-YtupRelease') {
-        Remove-Item -Path "function:global:$name" -ErrorAction SilentlyContinue
+        Remove-Item -Path "function:$name" -ErrorAction SilentlyContinue
     }
     if ($global:YtupRoot -and (Test-Path -LiteralPath $global:YtupRoot)) {
         Remove-Item -LiteralPath $global:YtupRoot -Recurse -Force -ErrorAction SilentlyContinue

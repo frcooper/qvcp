@@ -83,12 +83,12 @@ BeforeAll {
 }
 
 AfterAll {
-    Remove-Item -Path 'function:global:yt-dlp'          -ErrorAction SilentlyContinue
-    Remove-Item -Path 'function:global:ffmpeg'          -ErrorAction SilentlyContinue
-    Remove-Item -Path 'function:global:Get-QvcpStubExitCode' -ErrorAction SilentlyContinue
-    Remove-Item -Path 'function:global:Get-QvcpArgAfter' -ErrorAction SilentlyContinue
-    Remove-Item -Path 'function:global:Reset-QvcpTestState' -ErrorAction SilentlyContinue
-    Remove-Item -Path 'function:global:Get-QvcpMonthFolder' -ErrorAction SilentlyContinue
+    Remove-Item -Path 'function:yt-dlp'          -ErrorAction SilentlyContinue
+    Remove-Item -Path 'function:ffmpeg'          -ErrorAction SilentlyContinue
+    Remove-Item -Path 'function:Get-QvcpStubExitCode' -ErrorAction SilentlyContinue
+    Remove-Item -Path 'function:Get-QvcpArgAfter' -ErrorAction SilentlyContinue
+    Remove-Item -Path 'function:Reset-QvcpTestState' -ErrorAction SilentlyContinue
+    Remove-Item -Path 'function:Get-QvcpMonthFolder' -ErrorAction SilentlyContinue
 
     $env:QVCP_OUTPUT_ROOT = $global:QvcpTestOriginalOutputRoot
 
@@ -133,6 +133,15 @@ Describe 'qvcp -G (generic yt-dlp mode)' {
         $call = $global:QvcpTestCalls[0]
         $call | Should -Contain '--no-cookies'
         $call | Should -Not -Contain '--cookies'
+    }
+
+    It '-OutDir replaces the dated output folder' {
+        $dir = Join-Path $global:QvcpTestRoot 'elsewhere'
+
+        qvcp -G 'https://example.com/clip.mp4' -OutDir $dir
+
+        Get-QvcpArgAfter -Arguments $global:QvcpTestCalls[0] -Flag '-P' | Should -Be $dir
+        Test-Path -LiteralPath $dir -PathType Container | Should -BeTrue
     }
 
     It 'downloads into the dated output folder' {
@@ -272,6 +281,14 @@ Describe 'qvcp -Y (YouTube mode)' {
 Describe 'qvcp (ffmpeg mode)' {
 
     BeforeEach { Reset-QvcpTestState }
+
+    It '-OutDir applies to ffmpeg mode too' {
+        $dir = Join-Path $global:QvcpTestRoot 'elsewhere'
+
+        qvcp 'My Clip' 'https://example.com/stream.m3u8' -OutDir $dir
+
+        $global:QvcpTestCalls[0][-1] | Should -Be (Join-Path $dir 'My Clip.mp4')
+    }
 
     It 'remuxes to an mp4 named after the label, with metadata' {
         qvcp 'My Clip' 'https://example.com/stream.m3u8'

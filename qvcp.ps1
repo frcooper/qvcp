@@ -14,7 +14,11 @@ function qvcp {
 
         [Parameter(ParameterSetName='Generic', Mandatory=$true)]
         [Alias('Generic')]
-        [switch]$G
+        [switch]$G,
+
+        # Download into this folder instead of the dated one under the
+        # output root. ytxa -Upgrade uses it to replace a file in place.
+        [string]$OutDir
     )
 
     $YTDLP_COOKIES_FILE = 'cookies.firefox-private.txt'
@@ -36,8 +40,12 @@ function qvcp {
             $Host.UI.RawUI.WindowTitle = $Word
         }
 
-        $now    = Get-Date
-        $folder = Join-Path $QVCP_OUTPUT_ROOT ('{0:yyyy-MM}' -f $now)
+        $folder = if ([string]::IsNullOrWhiteSpace($OutDir)) {
+            Join-Path $QVCP_OUTPUT_ROOT ('{0:yyyy-MM}' -f (Get-Date))
+        }
+        else {
+            $OutDir
+        }
 
         if (-not (Test-Path -LiteralPath $folder -PathType Container)) {
             try {

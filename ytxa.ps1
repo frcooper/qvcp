@@ -33,6 +33,11 @@ function ytxa {
     .EXAMPLE
         ytxa | Where-Object ResStatus -eq Upgrade
         Files that YouTube now offers in a higher resolution.
+
+    .EXAMPLE
+        ytxa D:\clips\2026-07 -Upgrade
+        Re-download those files in place, keeping each old one until its
+        replacement has landed.
     #>
     [CmdletBinding()]
     param(
@@ -63,7 +68,13 @@ function ytxa {
         # URLs per yt-dlp invocation. yt-dlp's start-up cost is amortised
         # across the batch; the per-video extraction cost is not.
         [ValidateRange(1, 100)]
-        [int]$BatchSize = 20
+        [int]$BatchSize = 20,
+
+        # Re-download every file marked Upgrade into its own folder via qvcp
+        # (-Y when the cookies file exists, -G otherwise). The old file is
+        # moved aside first and deleted only once the new one is confirmed;
+        # on failure it is put back. Needs qvcp loaded in the session.
+        [switch]$Upgrade
     )
 
     # Kept in sync with qvcp.ps1 by hand; the two files are dot-sourced
@@ -85,6 +96,13 @@ function ytxa {
     }
     if (-not (Get-Command 'ffprobe' -ErrorAction SilentlyContinue)) {
         throw "ffprobe not found on PATH"
+    }
+
+    if ($Upgrade -and $NoResolutionCheck) {
+        throw "-Upgrade needs the resolution check; drop -NoResolutionCheck"
+    }
+    if ($Upgrade -and -not (Get-Command 'qvcp' -ErrorAction SilentlyContinue)) {
+        throw "-Upgrade downloads through qvcp, which is not loaded; dot-source qvcp.ps1 first"
     }
 
     $ytDlpCookiesPath = $null
@@ -173,6 +191,8 @@ function ytxa {
             Res             = $null
             BestRes         = $null
             ResStatus       = 'Skipped'   # Skipped | OK | Upgrade | Unavailable | NoVideo
+            UpgradeStatus   = $null       # Upgraded | Failed, only with -Upgrade
+            NewPath         = $null
             Note            = $null
         }
 
@@ -338,6 +358,57 @@ function ytxa {
         }
     }
 
+    # ---- Pass 3: replace upgradable files ----------------------------------
+
+    if ($Upgrade) {
+        $ASIDE_SUFFIX = '.ytxa-old'
+        $todo = @($rows | Where-Object ResStatus -eq 'Upgrade')
+        $i = 0
+        foreach ($row in $todo) {
+            $i++
+            Write-Progress -Activity 'Upgrading' -Status ([System.IO.Path]::GetFileName($row.Path)) -PercentComplete (100 * ($i - 1) / $todo.Count)
+
+            $dir   = [System.IO.Path]::GetDirectoryName($row.Path)
+            $aside = $row.Path + $ASIDE_SUFFIX
+            $url   = "https://www.youtube.com/watch?v=$($row.Id)"
+
+            # yt-dlp refuses to overwrite a same-named file ("has already been
+            # downloaded"), so the old one is moved aside for the duration.
+            Move-Item -LiteralPath $row.Path -Destination $aside -Force
+            $newFile = $null
+            try {
+                if ($ytDlpCookiesPath) { qvcp -Y $url -OutDir $dir } else { qvcp -G $url -OutDir $dir }
+
+                # The new name is whatever yt-dlp chose (the title may have
+                # changed, the container may differ), so find it by id.
+                $newFile = Get-ChildItem -LiteralPath $dir -File |
+                    Where-Object { $_.FullName -ne $aside -and $VIDEO_EXT -contains $_.Extension.ToLowerInvariant() -and $_.BaseName -match "\[$([regex]::Escape($row.Id))\]$" } |
+                    Sort-Object LastWriteTime -Descending |
+                    Select-Object -First 1
+                if (-not $newFile) {
+                    throw "qvcp returned without error but no new file with [$($row.Id)] appeared in '$dir'"
+                }
+            }
+            catch {
+                $row.UpgradeStatus = 'Failed'
+                $row.Note = "$_"
+                Write-Warning "Upgrade of '$($row.Path)' failed: $_"
+                try {
+                    Move-Item -LiteralPath $aside -Destination $row.Path
+                }
+                catch {
+                    Write-Warning "Could not restore '$($row.Path)' from '$aside': $_"
+                }
+                continue
+            }
+
+            Remove-Item -LiteralPath $aside -Force
+            $row.UpgradeStatus = 'Upgraded'
+            $row.NewPath       = $newFile.FullName
+        }
+        Write-Progress -Activity 'Upgrading' -Completed
+    }
+
     # ---- Summary -----------------------------------------------------------
 
     $summary = [ordered]@{
@@ -348,6 +419,10 @@ function ytxa {
     if (-not $NoResolutionCheck) {
         $summary.Upgradable  = @($rows | Where-Object ResStatus -eq 'Upgrade').Count
         $summary.Unavailable = @($rows | Where-Object ResStatus -eq 'Unavailable').Count
+    }
+    if ($Upgrade) {
+        $summary.Upgraded      = @($rows | Where-Object UpgradeStatus -eq 'Upgraded').Count
+        $summary.UpgradeFailed = @($rows | Where-Object UpgradeStatus -eq 'Failed').Count
     }
     # Write-Host lands on the information stream (PS 5+), so 6>$null silences
     # the summary and the pipeline carries only the rows.
