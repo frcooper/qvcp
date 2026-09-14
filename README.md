@@ -107,11 +107,15 @@ Drop the copied HLS/DASH URL straight into `qvcp` to build an `mp4` that’s rea
 ```pwsh
 ytxa                                        # the qvcp output root
 ytxa D:\clips                               # any tree
+ytxa '.\Some Clip [LY5YF8LgHy0].mp4'        # one file
+ytxa D:\clips\*Girls* *.mkv                  # filespecs, matched recursively
 ytxa -MissingSourceUrl -NoResolutionCheck   # offline: files whose id is only in the name
 ytxa | Where-Object ResStatus -eq Upgrade | Select-Object Path, Res, BestRes
 ```
 
-Files are recognised by yt-dlp's default `Title [<id>].<ext>` naming (`mp4`, `mkv`, `webm`, `mov`, `m4v`). Only the bracketed form counts — an 11-character id can appear by accident in any title, so a bare match would be mostly noise.
+Each path may be a folder (scanned recursively), a single file, or a filespec; a filespec is matched recursively below its folder part, so `D:\clips\*.mkv` finds every mkv under `D:\clips`. Several paths can be given and each file is reported once.
+
+Folder scans and filespecs pick up video files (`mp4`, `mkv`, `webm`, `mov`, `m4v`) named in yt-dlp's default `Title [<id>].<ext>` form — the extension filter keeps `*Girls*` from pulling in `.description` sidecars, which carry the same suffix. A file named outright is taken as-is, whatever its extension, and ffprobe decides. Only the bracketed id form counts — an 11-character id can appear by accident in any title, so a bare match would be mostly noise.
 
 One object per file is emitted, so the result can be filtered, sorted, or exported:
 

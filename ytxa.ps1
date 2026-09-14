@@ -11,6 +11,10 @@ function ytxa {
         now. One object per file is emitted so the result can be filtered,
         sorted, or exported.
 
+        Each -Path entry may be a folder (scanned recursively), a single file,
+        or a filespec such as *.mkv or D:\clips\*Girls*, which is matched
+        recursively below its folder part.
+
         Resolution is compared the way yt-dlp ranks it: the smaller of width
         and height, so a 1080x1920 portrait file is "1080", not "1920".
 
@@ -23,14 +27,20 @@ function ytxa {
         Only files whose id is in the name but not in the comment tag.
 
     .EXAMPLE
+        ytxa '.\Some Clip [LY5YF8LgHy0].mp4' *.mkv
+        One named file plus every .mkv under the current folder.
+
+    .EXAMPLE
         ytxa | Where-Object ResStatus -eq Upgrade
         Files that YouTube now offers in a higher resolution.
     #>
     [CmdletBinding()]
     param(
-        # Root of the tree to scan. Defaults to the qvcp output root.
-        [Parameter(Position=0)]
-        [string]$Path,
+        # Folders (scanned recursively), files, or filespecs (matched
+        # recursively below their folder part). Defaults to the qvcp output
+        # root.
+        [Parameter(Position=0, ValueFromRemainingArguments=$true)]
+        [string[]]$Path,
 
         # Report only files whose name carries an id but whose metadata has no
         # [[SourceURL|...]] comment. The filename id still drives the
@@ -67,11 +77,9 @@ function ytxa {
     $SOURCE_SIGIL = '\[\[SourceURL\|(?<url>.*?)\]\]'
     $VIDEO_EXT    = @('.mp4', '.mkv', '.webm', '.mov', '.m4v')
 
-    if ([string]::IsNullOrWhiteSpace($Path)) {
-        $Path = $QVCP_OUTPUT_ROOT
-    }
-    if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
-        throw "Folder not found: '$Path'"
+    $Path = @($Path | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($Path.Count -eq 0) {
+        $Path = @($QVCP_OUTPUT_ROOT)
     }
     if (-not (Get-Command 'ffprobe' -ErrorAction SilentlyContinue)) {
         throw "ffprobe not found on PATH"
@@ -101,9 +109,43 @@ function ytxa {
 
     # ---- Pass 1: filesystem + ffprobe ------------------------------------
 
-    $files = @(Get-ChildItem -LiteralPath $Path -File -Recurse |
-        Where-Object { $VIDEO_EXT -contains $_.Extension.ToLowerInvariant() -and $_.BaseName -match $ID_IN_NAME } |
-        Sort-Object FullName)
+    # Folder scans and filespecs are limited to video extensions, since a
+    # pattern like *Girls* would otherwise pull in yt-dlp's sidecar files
+    # (.description, .jpg), which carry the same "[id]" suffix. A file named
+    # outright is taken as-is and ffprobe decides. Literal lookups come first
+    # because '[' in a real name is also a wildcard character.
+    $isCandidate = { $VIDEO_EXT -contains $_.Extension.ToLowerInvariant() -and $_.BaseName -match $ID_IN_NAME }
+    $seen  = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $files = [System.Collections.Generic.List[System.IO.FileInfo]]::new()
+    foreach ($spec in $Path) {
+        if (Test-Path -LiteralPath $spec -PathType Container) {
+            $found = @(Get-ChildItem -LiteralPath $spec -File -Recurse | Where-Object $isCandidate)
+        }
+        elseif (Test-Path -LiteralPath $spec -PathType Leaf) {
+            $item = Get-Item -LiteralPath $spec
+            if ($item.BaseName -notmatch $ID_IN_NAME) {
+                Write-Warning "No [id] in the file name, skipped: '$spec'"
+                continue
+            }
+            $found = @($item)
+        }
+        elseif ([System.Management.Automation.WildcardPattern]::ContainsWildcardCharacters($spec)) {
+            # With -Recurse, a wildcard in the leaf acts as -Include for every
+            # level below the folder part, which is the "recursive filespec"
+            # the caller asked for.
+            $found = @(Get-ChildItem -Path $spec -File -Recurse -ErrorAction SilentlyContinue | Where-Object $isCandidate)
+            if ($found.Count -eq 0) {
+                Write-Warning "Nothing matched '$spec'"
+            }
+        }
+        else {
+            throw "Path not found: '$spec'"
+        }
+        foreach ($f in $found) {
+            if ($seen.Add($f.FullName)) { $files.Add($f) }
+        }
+    }
+    $files = @($files | Sort-Object FullName)
 
     $rows = [System.Collections.Generic.List[object]]::new()
     $i = 0

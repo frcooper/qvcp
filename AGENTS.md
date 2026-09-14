@@ -53,6 +53,7 @@ This repo is a small, copy/paste–driven toolkit:
 ## ytxa helper notes
 
 - [ytxa.ps1](ytxa.ps1) is a separate dot-sourced function, not a mode of `qvcp`. It duplicates the cookies-file name and output-root default from `qvcp.ps1` on purpose (there is no shared module); keep the two in sync by hand.
+- `-Path` takes folders, files, and filespecs, several at once. Literal lookups (`Test-Path -LiteralPath`) run before the wildcard branch because `[` in a real file name is also a wildcard character; a filespec is matched recursively via `Get-ChildItem -Path <spec> -Recurse`, where a leaf wildcard acts as `-Include` at every level. The extension filter applies to folder scans and filespecs, not to a file named outright.
 - Files are matched only by yt-dlp's bracketed `[<id>]` suffix. Do not loosen this to a bare 11-character match; titles contain such runs by chance.
 - Resolution is compared as `min(width, height)` on both sides, which is how yt-dlp's `res` sort key works, so portrait video is not misreported.
 - The yt-dlp query runs **without cookies** unless `-UseCookies` is passed, uses `-j` (no download), and batches ids per invocation. Per-video `ERROR:` lines arrive on stderr; the function captures both streams with `2>&1` and maps the reason back to the row by id. The test stub emits an `ErrorRecord` on the output stream to mimic that, because `Write-Error` would become terminating under Pester's `$ErrorActionPreference`.

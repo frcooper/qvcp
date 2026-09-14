@@ -136,9 +136,70 @@ Describe 'ytxa file discovery' {
         }
     }
 
-    It 'throws for a folder that does not exist' {
+    It 'throws for a path that does not exist' {
         { ytxa (Join-Path $global:YtxaRoot 'nope') -NoResolutionCheck } |
-            Should -Throw -ExpectedMessage '*Folder not found*'
+            Should -Throw -ExpectedMessage '*Path not found*'
+    }
+
+    It 'accepts a single file, brackets and all' {
+        $file = New-YtxaFile 'sub/one [aaaaaaaaaaa].mp4'
+        New-YtxaFile 'sub/other [bbbbbbbbbbb].mp4' | Out-Null
+
+        $rows = @(ytxa $file -NoResolutionCheck 6>$null)
+
+        $rows.Count | Should -Be 1
+        $rows[0].Path | Should -Be $file
+    }
+
+    It 'takes a named file as-is, whatever its extension' {
+        $file = New-YtxaFile 'odd [aaaaaaaaaaa].ts'
+
+        @(ytxa $file -NoResolutionCheck 6>$null).Count | Should -Be 1
+    }
+
+    It 'skips a named file that has no id, with a warning' {
+        $file = New-YtxaFile 'no id.mp4'
+
+        $rows = @(ytxa $file -NoResolutionCheck -WarningVariable w -WarningAction SilentlyContinue 6>$null)
+
+        $rows.Count | Should -Be 0
+        $w | Should -Match 'No \[id\]'
+    }
+
+    It 'matches a filespec recursively below its folder part' {
+        New-YtxaFile 'top [aaaaaaaaaaa].mkv' | Out-Null
+        New-YtxaFile 'deep/er/low [bbbbbbbbbbb].mkv' | Out-Null
+        New-YtxaFile 'deep/not this [ccccccccccc].mp4' | Out-Null
+
+        $rows = @(ytxa (Join-Path $global:YtxaRoot '*.mkv') -NoResolutionCheck 6>$null)
+
+        $rows.Id | Should -Be @('bbbbbbbbbbb', 'aaaaaaaaaaa')
+    }
+
+    It 'applies the video-extension filter to filespec matches' {
+        New-YtxaFile 'clip [aaaaaaaaaaa].mp4' | Out-Null
+        New-YtxaFile 'clip [aaaaaaaaaaa].description' | Out-Null
+
+        $rows = @(ytxa (Join-Path $global:YtxaRoot 'clip*') -NoResolutionCheck 6>$null)
+
+        $rows.Count | Should -Be 1
+        $rows[0].Path | Should -BeLike '*.mp4'
+    }
+
+    It 'warns, not throws, for a filespec that matches nothing' {
+        $rows = @(ytxa (Join-Path $global:YtxaRoot '*.avi') -NoResolutionCheck -WarningVariable w -WarningAction SilentlyContinue 6>$null)
+
+        $rows.Count | Should -Be 0
+        $w | Should -Match 'Nothing matched'
+    }
+
+    It 'accepts several paths and reports each file once' {
+        $file = New-YtxaFile 'one [aaaaaaaaaaa].mp4'
+        New-YtxaFile 'sub/two [bbbbbbbbbbb].mkv' | Out-Null
+
+        $rows = @(ytxa $file $global:YtxaRoot (Join-Path $global:YtxaRoot '*.mkv') -NoResolutionCheck 6>$null)
+
+        $rows.Id | Should -Be @('aaaaaaaaaaa', 'bbbbbbbbbbb')
     }
 }
 
