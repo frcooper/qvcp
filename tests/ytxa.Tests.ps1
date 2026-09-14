@@ -93,6 +93,9 @@ BeforeAll {
             # Pin the moved-aside file open so ytxa's cleanup Remove-Item fails.
             # The test disposes $YtxaAsideHandle afterwards.
             $aside = Get-ChildItem -LiteralPath $dir -Filter '*.ytxa-old' | Select-Object -First 1
+            if (-not $aside) {
+                throw "YtxaHoldAside is set but no *.ytxa-old file exists in '$dir' to pin open"
+            }
             $global:YtxaAsideHandle = [System.IO.File]::Open($aside.FullName, 'Open', 'Read', 'None')
         }
     }
@@ -104,6 +107,9 @@ BeforeAll {
         $global:YtxaQvcpFails  = @()
         $global:YtxaQvcpNames  = @{}
         $global:YtxaHoldAside  = $false
+        # A test that failed before its finally block may have left the pinned
+        # handle open, which would lock the temp tree for the rest of the run.
+        if ($global:YtxaAsideHandle) { $global:YtxaAsideHandle.Dispose() }
         $global:YtxaAsideHandle = $null
         $global:YtxaProbe      = @{}
         $global:YtxaFormats    = @{}
