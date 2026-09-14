@@ -57,6 +57,10 @@ qvcp -Y "https://www.youtube.com/watch?v=abc" "https://www.youtube.com/watch?v=d
 
 Cookies are only attached to YouTube URLs; anything else in the list is fetched without them.
 
+A URL that fails does not stop the batch: qvcp warns, moves on, and throws once at the end listing every URL that failed with its exit code. Note that yt-dlp exits 1 when it has to skip an unavailable fragment (common for the last fragment of a YouTube HLS stream) even though the file was written and a re-run reports it as already downloaded — the file is missing only that fragment.
+
+When signed in, YouTube may SABR-restrict the clients yt-dlp uses for cookies, which shows up in the log as `Downloading tv downgraded player API JSON` and leaves only m3u8 formats capped at 1080p. For public videos, `-G` avoids cookies entirely and gets the full DASH ladder (up to 2160p), so prefer it unless the video actually needs your account.
+
 Both yt-dlp modes run `--embed-metadata`, so the video's own title, artist, and description are written into the file, and the origin URL is recorded in `comment` as `[[SourceURL|<url>]]`:
 
 ```
