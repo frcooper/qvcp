@@ -320,6 +320,8 @@ function ytxa {
         $summary.Upgradable  = @($rows | Where-Object ResStatus -eq 'Upgrade').Count
         $summary.Unavailable = @($rows | Where-Object ResStatus -eq 'Unavailable').Count
     }
+    # Write-Host lands on the information stream (PS 5+), so 6>$null silences
+    # the summary and the pipeline carries only the rows.
     Write-Host (($summary.GetEnumerator() | ForEach-Object { "{0}: {1}" -f $_.Key, $_.Value }) -join '  ')
 
     $rows

@@ -57,7 +57,8 @@ This repo is a small, copy/paste–driven toolkit:
 - Files are matched only by yt-dlp's bracketed `[<id>]` suffix. Do not loosen this to a bare 11-character match; titles contain such runs by chance.
 - Resolution is compared as `min(width, height)` on both sides, which is how yt-dlp's `res` sort key works, so portrait video is not misreported.
 - The yt-dlp query runs **without cookies** unless `-UseCookies` is passed, uses `-j` (no download), and batches ids per invocation. Per-video `ERROR:` lines arrive on stderr; the function captures both streams with `2>&1` and maps the reason back to the row by id. The test stub emits an `ErrorRecord` on the output stream to mimic that, because `Write-Error` would become terminating under Pester's `$ErrorActionPreference`.
-- The function emits one object per file and writes its summary with `Write-Host` so the pipeline stays clean.
+- The function emits one object per file and writes its summary with `Write-Host`, which since PowerShell 5 lands on the information stream: `6>$null` silences it and the pipeline stays clean. Do not swap it for `Write-Information` on the assumption that `Write-Host` is unredirectable; that stopped being true in PS 4.
+- `ffprobe` is called with `-i <file>`, which its own `-h` lists and which keeps a name starting with `-` from being read as an option. Do not "fix" it to a bare positional argument.
 - [tests/ytxa.Tests.ps1](tests/ytxa.Tests.ps1) builds an empty placeholder tree in a temp folder and answers `ffprobe` from a per-file table keyed by leaf name; `yt-dlp` answers from a per-id table of resolutions.
 
 ## Tests
