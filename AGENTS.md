@@ -13,6 +13,7 @@ This repo is a small, copy/paste–driven toolkit:
 - [brave-scriptlet.md](brave-scriptlet.md): Brave installation / enablement steps.
 - [qvcp.ps1](qvcp.ps1): PowerShell `qvcp` function wrapper around `ffmpeg`.
 - [ytxa.ps1](ytxa.ps1): PowerShell `ytxa` function that checks a tree of downloads for the SourceURL tag and for newer, higher-resolution versions on YouTube.
+- [ytup.ps1](ytup.ps1): PowerShell `ytup` function that updates yt-dlp (winget) and the bgutil PO token provider (git checkout + plugin zip) together.
 
 ## Workflow
 
@@ -61,10 +62,17 @@ This repo is a small, copy/paste–driven toolkit:
 - `ffprobe` is called with `-i <file>`, which its own `-h` lists and which keeps a name starting with `-` from being read as an option. Do not "fix" it to a bare positional argument.
 - [tests/ytxa.Tests.ps1](tests/ytxa.Tests.ps1) builds an empty placeholder tree in a temp folder and answers `ffprobe` from a per-file table keyed by leaf name; `yt-dlp` answers from a per-id table of resolutions.
 
+## ytup helper notes
+
+- [ytup.ps1](ytup.ps1) runs three independent steps through a local `Step` helper that catches, warns, and records; the function throws once at the end. `Step` bodies run in a child scope, so they cannot assign to `ytup`'s variables — anything to hand back is *output* (see the release lookup), and the `$versions` hashtable is mutated by reference.
+- winget's "modified portable package" refusal is detected by text and retried with `--force`; "No available upgrade found" is success, not failure. Native tool output is captured with `2>&1 | ForEach-Object { "$_" }` and echoed, so the user sees winget/git/deno as they run.
+- The provider checkout and the plugin zip must come from the same release: both are taken from one GitHub `releases/latest` response, and `Get-YtupPluginVersion` reads `__version__` back out of the zip to confirm. `deno install` must run with `server\` as the working directory.
+- [tests/ytup.Tests.ps1](tests/ytup.Tests.ps1) stubs `winget` / `git` / `deno` / `yt-dlp` and mocks `Invoke-RestMethod` / `Invoke-WebRequest` (the latter writes a real zip). `Get-YtupCalls` builds its result with a loop and `return , $out` because piping an array of argument arrays unrolls them.
+
 ## Tests
 
-- [tests/qvcp.Tests.ps1](tests/qvcp.Tests.ps1) and [tests/ytxa.Tests.ps1](tests/ytxa.Tests.ps1) are Pester 5+ suites covering the PowerShell helpers; run them with [tests/run-tests.ps1](tests/run-tests.ps1). CI: [.github/workflows/tests.yml](.github/workflows/tests.yml).
-- The suites shadow `yt-dlp` / `ffmpeg` / `ffprobe` with global stub **functions** (PowerShell resolves functions before applications) and assert on the recorded argument arrays — nothing is downloaded. Each file defines and removes its own stubs in `BeforeAll` / `AfterAll`, since the files run one after the other in the same session.
+- [tests/qvcp.Tests.ps1](tests/qvcp.Tests.ps1), [tests/ytxa.Tests.ps1](tests/ytxa.Tests.ps1) and [tests/ytup.Tests.ps1](tests/ytup.Tests.ps1) are Pester 5+ suites covering the PowerShell helpers; run them with [tests/run-tests.ps1](tests/run-tests.ps1). CI: [.github/workflows/tests.yml](.github/workflows/tests.yml).
+- The suites shadow `yt-dlp` / `ffmpeg` / `ffprobe` / `winget` / `git` / `deno` with global stub **functions** (PowerShell resolves functions before applications) and assert on the recorded argument arrays — nothing is downloaded. Each file defines and removes its own stubs in `BeforeAll` / `AfterAll`, since the files run one after the other in the same session.
 - Stubs also record `$Host.UI.RawUI.WindowTitle` at call time, which is the only point where the title is observable from outside.
 - `-Skip:` is evaluated during Pester discovery, so anything a skip condition depends on must be probed in `BeforeDiscovery`, not `BeforeAll`. Pester rejects a `BeforeEach` at the container root; each `Describe` calls `Reset-QvcpTestState` instead.
 - Tests must not write to the real `X:\in\clips` or the user's Documents folder. Cookie-dependent tests skip based on whether `cookies.firefox-private.txt` already exists.
