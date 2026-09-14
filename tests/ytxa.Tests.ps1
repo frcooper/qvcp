@@ -74,9 +74,29 @@ BeforeAll {
         }
     }
 
+    # Stand-in for the real qvcp: records its arguments and, unless the id is
+    # in $YtxaQvcpFails, drops a file named the way yt-dlp would into -OutDir.
+    # $YtxaQvcpNames maps an id to a different new file name, for the case
+    # where the title or container changed upstream.
+    function global:qvcp {
+        $global:YtxaQvcpCalls += , ([string[]]$args)
+        $i = [Array]::IndexOf([string[]]$args, '-OutDir')
+        $dir = [string]$args[$i + 1]
+        $url = [string]($args | Where-Object { $_ -like 'https://*' } | Select-Object -First 1)
+        $id  = [regex]::Match($url, 'v=(?<id>[A-Za-z0-9_-]{11})').Groups['id'].Value
+        if ($global:YtxaQvcpFails -contains $id) {
+            throw "yt-dlp failed for '$url' (exit code 1)"
+        }
+        $name = if ($global:YtxaQvcpNames.ContainsKey($id)) { $global:YtxaQvcpNames[$id] } else { "new [$id].mp4" }
+        Set-Content -LiteralPath (Join-Path $dir $name) -Value 'new' -NoNewline
+    }
+
     function global:Reset-YtxaState {
         $global:YtxaProbeCalls = @()
         $global:YtxaYtDlpCalls = @()
+        $global:YtxaQvcpCalls  = @()
+        $global:YtxaQvcpFails  = @()
+        $global:YtxaQvcpNames  = @{}
         $global:YtxaProbe      = @{}
         $global:YtxaFormats    = @{}
         $global:YtxaGated      = @()
@@ -98,13 +118,13 @@ BeforeAll {
 }
 
 AfterAll {
-    foreach ($name in 'ffprobe', 'yt-dlp', 'Reset-YtxaState', 'New-YtxaFile', 'Get-YtxaUrls') {
-        Remove-Item -Path "function:global:$name" -ErrorAction SilentlyContinue
+    foreach ($name in 'ffprobe', 'yt-dlp', 'qvcp', 'Reset-YtxaState', 'New-YtxaFile', 'Get-YtxaUrls') {
+        Remove-Item -Path "function:$name" -ErrorAction SilentlyContinue
     }
     if ($global:YtxaRoot -and (Test-Path -LiteralPath $global:YtxaRoot)) {
         Remove-Item -LiteralPath $global:YtxaRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
-    Remove-Variable -Name YtxaRoot, YtxaProbeCalls, YtxaYtDlpCalls, YtxaProbe,
+    Remove-Variable -Name YtxaRoot, YtxaProbeCalls, YtxaYtDlpCalls, YtxaQvcpCalls, YtxaQvcpFails, YtxaQvcpNames, YtxaProbe,
         YtxaFormats, YtxaGated, YtxaHasCookies -Scope Global -ErrorAction SilentlyContinue
 }
 
@@ -470,5 +490,128 @@ Describe 'ytxa resolution check' {
         ytxa $global:YtxaRoot 6>$null | Out-Null
 
         $global:YtxaYtDlpCalls.Count | Should -Be 0
+    }
+}
+
+Describe 'ytxa -Upgrade' {
+
+    BeforeEach { Reset-YtxaState }
+
+    It 'refuses -NoResolutionCheck' {
+        { ytxa $global:YtxaRoot -Upgrade -NoResolutionCheck 6>$null } |
+            Should -Throw -ExpectedMessage '*-Upgrade needs the resolution check*'
+    }
+
+    It 'refuses to run without qvcp loaded' {
+        # Remove-Item ignores a scope qualifier on the function: drive
+        # ('function:global:qvcp' removes nothing), while Set-Item honours it.
+        $saved = Get-Item function:qvcp
+        Remove-Item function:qvcp
+        try {
+            { ytxa $global:YtxaRoot -Upgrade 6>$null } |
+                Should -Throw -ExpectedMessage '*qvcp*not loaded*'
+        }
+        finally {
+            Set-Item function:global:qvcp $saved.ScriptBlock
+        }
+    }
+
+    It 're-downloads only the Upgrade rows, each into its own folder' {
+        $low  = New-YtxaFile 'one/low [aaaaaaaaaaa].mp4' -Width 1280 -Height 720
+        $best = New-YtxaFile 'two/best [bbbbbbbbbbb].mp4' -Width 3840 -Height 2160
+        $global:YtxaFormats['aaaaaaaaaaa'] = 1080
+        $global:YtxaFormats['bbbbbbbbbbb'] = 2160
+
+        $rows = @(ytxa $global:YtxaRoot -Upgrade 6>$null)
+
+        $global:YtxaQvcpCalls.Count | Should -Be 1
+        $call = $global:YtxaQvcpCalls[0]
+        $call | Should -Contain 'https://www.youtube.com/watch?v=aaaaaaaaaaa'
+        $call[[Array]::IndexOf($call, '-OutDir') + 1] | Should -Be (Split-Path $low)
+        $rows[0].UpgradeStatus | Should -Be 'Upgraded'
+        $rows[1].UpgradeStatus | Should -BeNullOrEmpty
+        Test-Path -LiteralPath $best | Should -BeTrue
+    }
+
+    It 'uses -Y when the cookies file exists' -Skip:(-not $global:YtxaHasCookies) {
+        New-YtxaFile 'low [aaaaaaaaaaa].mp4' -Width 1280 -Height 720 | Out-Null
+        $global:YtxaFormats['aaaaaaaaaaa'] = 1080
+
+        ytxa $global:YtxaRoot -Upgrade 6>$null | Out-Null
+
+        $global:YtxaQvcpCalls[0] | Should -Contain '-Y'
+    }
+
+    It 'falls back to -G when there is no cookies file' -Skip:$global:YtxaHasCookies {
+        New-YtxaFile 'low [aaaaaaaaaaa].mp4' -Width 1280 -Height 720 | Out-Null
+        $global:YtxaFormats['aaaaaaaaaaa'] = 1080
+
+        ytxa $global:YtxaRoot -Upgrade 6>$null | Out-Null
+
+        $global:YtxaQvcpCalls[0] | Should -Contain '-G'
+    }
+
+    It 'removes the old file only after the new one is in place, and reports the new path' {
+        $old = New-YtxaFile 'low [aaaaaaaaaaa].mp4' -Width 1280 -Height 720
+        $global:YtxaFormats['aaaaaaaaaaa'] = 1080
+
+        $row = @(ytxa $global:YtxaRoot -Upgrade 6>$null)[0]
+
+        Test-Path -LiteralPath $old | Should -BeFalse
+        Test-Path -LiteralPath "$old.ytxa-old" | Should -BeFalse
+        $row.NewPath | Should -Be (Join-Path (Split-Path $old) 'new [aaaaaaaaaaa].mp4')
+        Test-Path -LiteralPath $row.NewPath | Should -BeTrue
+    }
+
+    It 'keeps the old file when the download fails, and marks the row Failed' {
+        $old = New-YtxaFile 'low [aaaaaaaaaaa].mp4' -Width 1280 -Height 720
+        $global:YtxaFormats['aaaaaaaaaaa'] = 1080
+        $global:YtxaQvcpFails = @('aaaaaaaaaaa')
+
+        $row = @(ytxa $global:YtxaRoot -Upgrade -WarningAction SilentlyContinue 6>$null)[0]
+
+        $row.UpgradeStatus | Should -Be 'Failed'
+        $row.Note          | Should -Match 'exit code 1'
+        $row.NewPath       | Should -BeNullOrEmpty
+        Test-Path -LiteralPath $old | Should -BeTrue
+        (Get-Item -LiteralPath $old).Length | Should -Be 0   # the original placeholder, not the stub's 'new'
+        Test-Path -LiteralPath "$old.ytxa-old" | Should -BeFalse
+    }
+
+    It 'treats a download that produced no file with the id as a failure' {
+        $old = New-YtxaFile 'low [aaaaaaaaaaa].mp4' -Width 1280 -Height 720
+        $global:YtxaFormats['aaaaaaaaaaa'] = 1080
+        $global:YtxaQvcpNames['aaaaaaaaaaa'] = 'wrong [zzzzzzzzzzz].mp4'
+
+        $row = @(ytxa $global:YtxaRoot -Upgrade -WarningAction SilentlyContinue 6>$null)[0]
+
+        $row.UpgradeStatus | Should -Be 'Failed'
+        $row.Note          | Should -Match 'no new file'
+        Test-Path -LiteralPath $old | Should -BeTrue
+    }
+
+    It 'finds the replacement even when its title and container changed' {
+        $old = New-YtxaFile 'old title [aaaaaaaaaaa].mp4' -Width 1280 -Height 720
+        $global:YtxaFormats['aaaaaaaaaaa'] = 1080
+        $global:YtxaQvcpNames['aaaaaaaaaaa'] = 'renamed title [aaaaaaaaaaa].mkv'
+
+        $row = @(ytxa $global:YtxaRoot -Upgrade 6>$null)[0]
+
+        $row.UpgradeStatus | Should -Be 'Upgraded'
+        $row.NewPath       | Should -BeLike '*renamed title [[]aaaaaaaaaaa[]].mkv'
+        Test-Path -LiteralPath $old | Should -BeFalse
+    }
+
+    It 'continues with the next file after a failure' {
+        New-YtxaFile 'a [aaaaaaaaaaa].mp4' -Width 1280 -Height 720 | Out-Null
+        New-YtxaFile 'b [bbbbbbbbbbb].mp4' -Width 1280 -Height 720 | Out-Null
+        $global:YtxaFormats['aaaaaaaaaaa'] = 1080
+        $global:YtxaFormats['bbbbbbbbbbb'] = 1080
+        $global:YtxaQvcpFails = @('aaaaaaaaaaa')
+
+        $rows = @(ytxa $global:YtxaRoot -Upgrade -WarningAction SilentlyContinue 6>$null)
+
+        $rows.UpgradeStatus | Should -Be @('Failed', 'Upgraded')
+        $global:YtxaQvcpCalls.Count | Should -Be 2
     }
 }
