@@ -100,9 +100,32 @@ $env:QVCP_OUTPUT_ROOT = 'D:\clips'
 
 Drop the copied HLS/DASH URL straight into `qvcp` to build an `mp4` that’s ready for VLC, editing, or archival.
 
+### Auditing what you already have (`qvcp-audit.ps1`)
+
+`qvcp-audit.ps1` defines `qvcp-audit`, which walks a tree of yt-dlp downloads and reports, per file, whether the `[[SourceURL|...]]` comment is present and whether YouTube now offers a higher resolution than the file has. Dot-source it from your profile alongside `qvcp.ps1`; it needs `ffprobe` on `PATH`, plus `yt-dlp` unless you skip the resolution check.
+
+```pwsh
+qvcp-audit                                   # the qvcp output root
+qvcp-audit D:\clips                          # any tree
+qvcp-audit -MissingSourceUrl -NoResolutionCheck   # offline: files whose id is only in the name
+qvcp-audit | Where-Object ResStatus -eq Upgrade | Select-Object Path, Res, BestRes
+```
+
+Files are recognised by yt-dlp's default `Title [<id>].<ext>` naming (`mp4`, `mkv`, `webm`, `mov`, `m4v`). Only the bracketed form counts — an 11-character id can appear by accident in any title, so a bare match would be mostly noise.
+
+One object per file is emitted, so the result can be filtered, sorted, or exported:
+
+| Field | Meaning |
+| --- | --- |
+| `Id` | The id from the filename. |
+| `SourceUrl`, `SourceUrlStatus` | The URL inside the comment sigil; `OK` when it names the same id, `Mismatch` when it names a different one, `Missing` when there is no sigil (a comment without the `[[SourceURL\|...]]` wrapper still counts as missing). mkv's upper-case `COMMENT` tag is read too. |
+| `Res`, `BestRes`, `ResStatus` | The file's resolution and the best YouTube offers now, measured as yt-dlp ranks it — the smaller of width and height, so a 1080×1920 portrait file is `1080`. `Upgrade` when `BestRes` is larger, `OK` otherwise, `Unavailable` when yt-dlp could not resolve the id (the reason lands in `Note`), `Skipped` under `-NoResolutionCheck`, `NoVideo` when ffprobe could not read the file. |
+
+The resolution check queries **without cookies** by default, one `yt-dlp -j` call per `-BatchSize` (20) ids and nothing is downloaded. That is deliberate: signed-in clients are SABR-restricted and under-report the ladder (see above), so the anonymous answer is the honest "best available". Pass `-UseCookies` for members-only or age-gated videos. Untagged files are checked by their filename id, which is what makes `-MissingSourceUrl` useful without `-NoResolutionCheck`: it tells you both that the tag is absent and whether the file is worth re-downloading. A one-line summary goes to the information stream (`6>$null` to silence it), not the pipeline.
+
 ### Tests
 
-The PowerShell helper has a [Pester](https://pester.dev) suite in [tests/](tests/). It stubs out `yt-dlp` / `ffmpeg` and asserts on the argument lists, so nothing is downloaded and no real files are written.
+The PowerShell helpers have a [Pester](https://pester.dev) suite in [tests/](tests/). It stubs out `yt-dlp` / `ffmpeg` / `ffprobe` and asserts on the argument lists, so nothing is downloaded and no real files are written.
 
 ```pwsh
 ./tests/run-tests.ps1
