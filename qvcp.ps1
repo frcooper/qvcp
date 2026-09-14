@@ -89,6 +89,11 @@ function qvcp {
                 }
             }
 
+            # One bad URL must not abandon the rest of the batch: yt-dlp exits 1
+            # for a skipped fragment even though the file was written, and
+            # re-running the whole list to get past it is the real cost.
+            $failed = @()
+
             foreach ($u in $Url) {
                 if ([string]::IsNullOrWhiteSpace($u)) {
                     continue
@@ -117,17 +122,28 @@ function qvcp {
 
                 & yt-dlp @ytDlpArgs
                 if ($LASTEXITCODE -ne 0) {
-                    # Tie each hint to the symptom that warrants it. yt-dlp exits 1
-                    # for everything, so asserting a single cause here misleads.
-                    $hints = @(
-                        "  * 'Postprocessing' / 'No such file or directory': the target file is locked or unreadable. A player or Explorer may still hold it open, and on a network share a deleted-but-open file lingers in the listing. Close it and retry."
-                        "  * nsig/SABR warnings, or only image formats offered: update with 'yt-dlp -U'."
-                    )
-                    if ($G) {
-                        $hints += "  * Sign-in required: generic mode sends no cookies, so use -Y instead."
-                    }
-                    throw ("yt-dlp failed for '$u' (exit code $LASTEXITCODE). Check the yt-dlp output above:`n" + ($hints -join "`n"))
+                    Write-Warning "yt-dlp exited $LASTEXITCODE for '$u'; continuing with the remaining URLs."
+                    $failed += [pscustomobject]@{ Url = $u; ExitCode = $LASTEXITCODE }
                 }
+            }
+
+            if ($failed.Count -gt 0) {
+                # Tie each hint to the symptom that warrants it. yt-dlp exits 1
+                # for everything, so asserting a single cause here misleads.
+                $hints = @(
+                    "  * 'Did not get any data blocks' then 'Skipping fragment N': a fragment (typically the last one of a YouTube HLS stream) was unavailable. The file was still written without it and a re-run reports it 'already downloaded'; only that fragment is missing."
+                    "  * 'Postprocessing' / 'No such file or directory': the target file is locked or unreadable. A player or Explorer may still hold it open, and on a network share a deleted-but-open file lingers in the listing. Close it and retry."
+                    "  * nsig/SABR warnings, or only image formats offered: update with 'yt-dlp -U'."
+                )
+                if ($G) {
+                    $hints += "  * Sign-in required: generic mode sends no cookies, so use -Y instead."
+                }
+                else {
+                    $hints += "  * 'tv downgraded player' in the log, or only m3u8 formats offered: YouTube is SABR-restricting the signed-in clients, which leaves HLS capped at 1080p. For public videos retry with -G (no cookies, full DASH ladder), and update with 'yt-dlp -U'."
+                }
+                $attempted = @($Url | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count
+                $lines = @($failed | ForEach-Object { "  '$($_.Url)' (exit code $($_.ExitCode))" })
+                throw ("yt-dlp failed for {0} of {1} URL(s):`n{2}`nCheck the yt-dlp output above:`n{3}" -f $failed.Count, $attempted, ($lines -join "`n"), ($hints -join "`n"))
             }
         }
         else {

@@ -47,16 +47,23 @@ BeforeAll {
 
     # Both stubs record their arguments and the window title as it stood at the
     # moment of the call, which is the only point where the title is observable.
+    # $QvcpTestExitCode may be a single value or one per call; the last entry
+    # is reused once the calls outnumber it.
+    function global:Get-QvcpStubExitCode {
+        $codes = @($global:QvcpTestExitCode)
+        $codes[[Math]::Min($global:QvcpTestCalls.Count - 1, $codes.Count - 1)]
+    }
+
     function global:yt-dlp {
         $global:QvcpTestCalls  += , ([string[]]$args)
         $global:QvcpTestTitles += $Host.UI.RawUI.WindowTitle
-        $global:LASTEXITCODE = $global:QvcpTestExitCode
+        $global:LASTEXITCODE = Get-QvcpStubExitCode
     }
 
     function global:ffmpeg {
         $global:QvcpTestCalls  += , ([string[]]$args)
         $global:QvcpTestTitles += $Host.UI.RawUI.WindowTitle
-        $global:LASTEXITCODE = $global:QvcpTestExitCode
+        $global:LASTEXITCODE = Get-QvcpStubExitCode
     }
 
     # Pester does not allow BeforeEach at the container root, so each Describe
@@ -78,6 +85,7 @@ BeforeAll {
 AfterAll {
     Remove-Item -Path 'function:global:yt-dlp'          -ErrorAction SilentlyContinue
     Remove-Item -Path 'function:global:ffmpeg'          -ErrorAction SilentlyContinue
+    Remove-Item -Path 'function:global:Get-QvcpStubExitCode' -ErrorAction SilentlyContinue
     Remove-Item -Path 'function:global:Get-QvcpArgAfter' -ErrorAction SilentlyContinue
     Remove-Item -Path 'function:global:Reset-QvcpTestState' -ErrorAction SilentlyContinue
     Remove-Item -Path 'function:global:Get-QvcpMonthFolder' -ErrorAction SilentlyContinue
@@ -160,7 +168,7 @@ Describe 'qvcp -G (generic yt-dlp mode)' {
     It 'throws when yt-dlp exits non-zero, and points at -Y for sign-in walls' {
         $global:QvcpTestExitCode = 1
 
-        { qvcp -G 'https://example.com/a.mp4' } |
+        { qvcp -G 'https://example.com/a.mp4' -WarningAction SilentlyContinue } |
             Should -Throw -ExpectedMessage '*exit code 1*use -Y instead*'
     }
 
@@ -178,11 +186,32 @@ Describe 'qvcp -G (generic yt-dlp mode)' {
         $call -join ' ' | Should -Not -Match 'use_metadata_tags'
     }
 
-    It 'stops on the first failing URL' {
+    It 'keeps going past a failing URL and reports only the failures at the end' {
+        $global:QvcpTestExitCode = 1, 0, 1
+
+        { qvcp -G 'https://example.com/a.mp4' 'https://example.com/b.mp4' 'https://example.com/c.mp4' -WarningAction SilentlyContinue } |
+            Should -Throw -ExpectedMessage "*2 of 3 URL(s)*'https://example.com/a.mp4' (exit code 1)*'https://example.com/c.mp4' (exit code 1)*"
+        $global:QvcpTestCalls.Count | Should -Be 3
+    }
+
+    It 'does not name URLs that succeeded in the failure report' {
+        $global:QvcpTestExitCode = 1, 0
+
+        { qvcp -G 'https://example.com/a.mp4' 'https://example.com/b.mp4' -WarningAction SilentlyContinue } |
+            Should -Throw -ExpectedMessage "*1 of 2 URL(s)*"
+        $global:QvcpTestCalls.Count | Should -Be 2
+    }
+
+    It 'throws nothing when every URL succeeds' {
+        { qvcp -G 'https://example.com/a.mp4' 'https://example.com/b.mp4' } | Should -Not -Throw
+        $global:QvcpTestCalls.Count | Should -Be 2
+    }
+
+    It 'explains the skipped-fragment exit code' {
         $global:QvcpTestExitCode = 1
 
-        { qvcp -G 'https://example.com/a.mp4' 'https://example.com/b.mp4' } | Should -Throw
-        $global:QvcpTestCalls.Count | Should -Be 1
+        { qvcp -G 'https://example.com/a.mp4' -WarningAction SilentlyContinue } |
+            Should -Throw -ExpectedMessage "*Skipping fragment*already downloaded*"
     }
 }
 
@@ -228,8 +257,15 @@ Describe 'qvcp -Y (YouTube mode)' {
     It 'keeps the yt-dlp -U hint on failure' {
         $global:QvcpTestExitCode = 1
 
-        { qvcp -Y 'https://example.com/clip.mp4' } |
+        { qvcp -Y 'https://example.com/clip.mp4' -WarningAction SilentlyContinue } |
             Should -Throw -ExpectedMessage "*yt-dlp -U*"
+    }
+
+    It 'points HLS-only downloads at -G' {
+        $global:QvcpTestExitCode = 1
+
+        { qvcp -Y 'https://example.com/clip.mp4' -WarningAction SilentlyContinue } |
+            Should -Throw -ExpectedMessage "*tv downgraded*retry with -G*"
     }
 }
 
