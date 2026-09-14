@@ -127,9 +127,27 @@ One object per file is emitted, so the result can be filtered, sorted, or export
 
 The resolution check queries **without cookies** first, one `yt-dlp -j` call per `-BatchSize` (20) ids and nothing is downloaded. That is deliberate: signed-in clients are SABR-restricted and under-report the ladder (see above), so the anonymous answer is the honest "best available". Ids that YouTube refuses without a sign-in ("Sign in to confirm your age", private, members-only) are then retried with the qvcp cookies file if it exists; rows resolved that way carry `Note: resolved with cookies; the ladder may be under-reported`. Pass `-UseCookies` to skip the anonymous pass and query everything signed-in. Untagged files are checked by their filename id, which is what makes `-MissingSourceUrl` useful without `-NoResolutionCheck`: it tells you both that the tag is absent and whether the file is worth re-downloading. A one-line summary goes to the information stream (`6>$null` to silence it), not the pipeline.
 
+### Keeping the toolchain current (`ytup.ps1`)
+
+`ytup.ps1` defines `ytup`, which updates everything the two tools above depend on, in one go:
+
+1. **yt-dlp** via `winget upgrade --id yt-dlp.yt-dlp.nightly`. A copy that has since self-updated with `yt-dlp -U` fails winget's modified-file check; `ytup` spots that and retries with `--force`. Pass `-Also C:\path\yt-dlp.exe` for copies winget does not manage — those get `-U`.
+2. **PO token provider** — the latest [bgutil-ytdlp-pot-provider](https://github.com/Brainicism/bgutil-ytdlp-pot-provider) release tag is checked out under `~\bgutil-ytdlp-pot-provider` (cloned on first run) and its Deno dependencies installed. That folder is the plugin's default `server_home`, so yt-dlp finds it with no extra arguments.
+3. **Provider plugin** — the matching plugin zip from the same release replaces `%APPDATA%\yt-dlp\plugins\bgutil-ytdlp-pot-provider.zip`.
+
+```pwsh
+ytup                              # everything
+ytup -SkipProvider                # yt-dlp only
+ytup -Also C:\Tools\yt-dlp.exe    # plus a second, non-winget copy
+```
+
+A failing step does not stop the others; one error at the end lists what failed, and a version table shows where things ended up. The provider's two halves are versioned together — `ytup` reads the version back out of the downloaded zip and warns if it disagrees with the release tag.
+
+Why a PO token provider at all: YouTube's web clients now require a proof-of-origin token for their HTTPS formats. Without one, a signed-in query for an age-gated video collapses to a single 360p format; with the provider, yt-dlp mints the token itself (via Deno, on demand, cached for six hours) and the full ladder comes back. Requires `git` and `deno` on `PATH`; Deno arrives as a winget dependency of yt-dlp.
+
 ### Tests
 
-The PowerShell helpers have a [Pester](https://pester.dev) suite in [tests/](tests/). It stubs out `yt-dlp` / `ffmpeg` / `ffprobe` and asserts on the argument lists, so nothing is downloaded and no real files are written.
+The PowerShell helpers have a [Pester](https://pester.dev) suite in [tests/](tests/). It stubs out `yt-dlp` / `ffmpeg` / `ffprobe` / `winget` / `git` / `deno` and asserts on the argument lists, so nothing is downloaded, installed, or written outside a temp folder.
 
 ```pwsh
 ./tests/run-tests.ps1
