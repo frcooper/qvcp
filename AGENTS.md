@@ -12,6 +12,7 @@ This repo is a small, copy/paste–driven toolkit:
 - [brave-video-stream-capture.scriptlet.js](brave-video-stream-capture.scriptlet.js): Brave scriptlet variant (no GM_* APIs; clipboard fallbacks).
 - [brave-scriptlet.md](brave-scriptlet.md): Brave installation / enablement steps.
 - [qvcp.ps1](qvcp.ps1): PowerShell `qvcp` function wrapper around `ffmpeg`.
+- [ytxa.ps1](ytxa.ps1): PowerShell `ytxa` function that checks a tree of downloads for the SourceURL tag and for newer, higher-resolution versions on YouTube.
 
 ## Workflow
 
@@ -49,10 +50,21 @@ This repo is a small, copy/paste–driven toolkit:
 - The `source` tag therefore survives only in mkv/webm. `comment` is the portable carrier, which is what the `[[SourceURL|...]]` sigil is for. It avoids ':' so the `--parse-metadata` rule needs no escaping, avoids '<>' so it survives being rendered as HTML, and uses '|' because that cannot appear unencoded in a URL.
 - ffmpeg mode still writes the bare URL as `comment`, not the `[[SourceURL|...]]` form.
 
+## ytxa helper notes
+
+- [ytxa.ps1](ytxa.ps1) is a separate dot-sourced function, not a mode of `qvcp`. It duplicates the cookies-file name and output-root default from `qvcp.ps1` on purpose (there is no shared module); keep the two in sync by hand.
+- `-Path` takes folders, files, and filespecs, several at once. Literal lookups (`Test-Path -LiteralPath`) run before the wildcard branch because `[` in a real file name is also a wildcard character; a filespec is matched recursively via `Get-ChildItem -Path <spec> -Recurse`, where a leaf wildcard acts as `-Include` at every level. The extension filter applies to folder scans and filespecs, not to a file named outright.
+- Files are matched only by yt-dlp's bracketed `[<id>]` suffix. Do not loosen this to a bare 11-character match; titles contain such runs by chance.
+- Resolution is compared as `min(width, height)` on both sides, which is how yt-dlp's `res` sort key works, so portrait video is not misreported.
+- The yt-dlp query runs **without cookies** unless `-UseCookies` is passed, uses `-j` (no download), and batches ids per invocation. Per-video `ERROR:` lines arrive on stderr; the function captures both streams with `2>&1` and maps the reason back to the row by id. The test stub emits an `ErrorRecord` on the output stream to mimic that, because `Write-Error` would become terminating under Pester's `$ErrorActionPreference`.
+- The function emits one object per file and writes its summary with `Write-Host`, which since PowerShell 5 lands on the information stream: `6>$null` silences it and the pipeline stays clean. Do not swap it for `Write-Information` on the assumption that `Write-Host` is unredirectable; that stopped being true in PS 4.
+- `ffprobe` is called with `-i <file>`, which its own `-h` lists and which keeps a name starting with `-` from being read as an option. Do not "fix" it to a bare positional argument.
+- [tests/ytxa.Tests.ps1](tests/ytxa.Tests.ps1) builds an empty placeholder tree in a temp folder and answers `ffprobe` from a per-file table keyed by leaf name; `yt-dlp` answers from a per-id table of resolutions.
+
 ## Tests
 
-- [tests/qvcp.Tests.ps1](tests/qvcp.Tests.ps1) is a Pester 5+ suite covering the PowerShell helper; run it with [tests/run-tests.ps1](tests/run-tests.ps1). CI: [.github/workflows/tests.yml](.github/workflows/tests.yml).
-- The suite shadows `yt-dlp` / `ffmpeg` with global stub **functions** (PowerShell resolves functions before applications) and asserts on the recorded argument arrays — nothing is downloaded.
+- [tests/qvcp.Tests.ps1](tests/qvcp.Tests.ps1) and [tests/ytxa.Tests.ps1](tests/ytxa.Tests.ps1) are Pester 5+ suites covering the PowerShell helpers; run them with [tests/run-tests.ps1](tests/run-tests.ps1). CI: [.github/workflows/tests.yml](.github/workflows/tests.yml).
+- The suites shadow `yt-dlp` / `ffmpeg` / `ffprobe` with global stub **functions** (PowerShell resolves functions before applications) and assert on the recorded argument arrays — nothing is downloaded. Each file defines and removes its own stubs in `BeforeAll` / `AfterAll`, since the files run one after the other in the same session.
 - Stubs also record `$Host.UI.RawUI.WindowTitle` at call time, which is the only point where the title is observable from outside.
 - `-Skip:` is evaluated during Pester discovery, so anything a skip condition depends on must be probed in `BeforeDiscovery`, not `BeforeAll`. Pester rejects a `BeforeEach` at the container root; each `Describe` calls `Reset-QvcpTestState` instead.
 - Tests must not write to the real `X:\in\clips` or the user's Documents folder. Cookie-dependent tests skip based on whether `cookies.firefox-private.txt` already exists.
