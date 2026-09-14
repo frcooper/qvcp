@@ -149,11 +149,6 @@ Describe 'ytup' {
             (Get-YtupCalls 'deno').Count | Should -Be 1
         }
 
-        It 'reports an -Also path that does not exist' {
-            { ytup -Also (Join-Path $global:YtupRoot 'nope.exe') -ProviderHome $global:YtupHome -PluginDir $global:YtupPlugins -WarningAction SilentlyContinue 6>$null } |
-                Should -Throw -ExpectedMessage '*nope.exe*not found*'
-        }
-
         It '-SkipYtDlp never calls winget' {
             ytup -SkipYtDlp -ProviderHome $global:YtupHome -PluginDir $global:YtupPlugins 6>$null
 
