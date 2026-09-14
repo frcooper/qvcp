@@ -1,4 +1,4 @@
-function qvcp-audit {
+function ytxa {
     <#
     .SYNOPSIS
         Audits a tree of yt-dlp downloads: is the [[SourceURL|...]] comment
@@ -15,15 +15,15 @@ function qvcp-audit {
         and height, so a 1080x1920 portrait file is "1080", not "1920".
 
     .EXAMPLE
-        qvcp-audit
+        ytxa
         Full audit of the qvcp output root.
 
     .EXAMPLE
-        qvcp-audit D:\clips -MissingSourceUrl
+        ytxa D:\clips -MissingSourceUrl
         Only files whose id is in the name but not in the comment tag.
 
     .EXAMPLE
-        qvcp-audit | Where-Object ResStatus -eq Upgrade
+        ytxa | Where-Object ResStatus -eq Upgrade
         Files that YouTube now offers in a higher resolution.
     #>
     [CmdletBinding()]

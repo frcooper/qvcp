@@ -100,15 +100,15 @@ $env:QVCP_OUTPUT_ROOT = 'D:\clips'
 
 Drop the copied HLS/DASH URL straight into `qvcp` to build an `mp4` that’s ready for VLC, editing, or archival.
 
-### Auditing what you already have (`qvcp-audit.ps1`)
+### Auditing what you already have (`ytxa.ps1`)
 
-`qvcp-audit.ps1` defines `qvcp-audit`, which walks a tree of yt-dlp downloads and reports, per file, whether the `[[SourceURL|...]]` comment is present and whether YouTube now offers a higher resolution than the file has. Dot-source it from your profile alongside `qvcp.ps1`; it needs `ffprobe` on `PATH`, plus `yt-dlp` unless you skip the resolution check.
+`ytxa.ps1` defines `ytxa`, which walks a tree of yt-dlp downloads and reports, per file, whether the `[[SourceURL|...]]` comment is present and whether YouTube now offers a higher resolution than the file has. Dot-source it from your profile alongside `qvcp.ps1`; it needs `ffprobe` on `PATH`, plus `yt-dlp` unless you skip the resolution check.
 
 ```pwsh
-qvcp-audit                                   # the qvcp output root
-qvcp-audit D:\clips                          # any tree
-qvcp-audit -MissingSourceUrl -NoResolutionCheck   # offline: files whose id is only in the name
-qvcp-audit | Where-Object ResStatus -eq Upgrade | Select-Object Path, Res, BestRes
+ytxa                                        # the qvcp output root
+ytxa D:\clips                               # any tree
+ytxa -MissingSourceUrl -NoResolutionCheck   # offline: files whose id is only in the name
+ytxa | Where-Object ResStatus -eq Upgrade | Select-Object Path, Res, BestRes
 ```
 
 Files are recognised by yt-dlp's default `Title [<id>].<ext>` naming (`mp4`, `mkv`, `webm`, `mov`, `m4v`). Only the bracketed form counts — an 11-character id can appear by accident in any title, so a bare match would be mostly noise.
