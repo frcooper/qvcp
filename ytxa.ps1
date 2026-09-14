@@ -101,7 +101,7 @@ function ytxa {
     if ($Upgrade -and $NoResolutionCheck) {
         throw "-Upgrade needs the resolution check; drop -NoResolutionCheck"
     }
-    if ($Upgrade -and -not (Get-Command 'qvcp' -ErrorAction SilentlyContinue)) {
+    if ($Upgrade -and -not (Get-Command 'qvcp' -CommandType Function -ErrorAction SilentlyContinue)) {
         throw "-Upgrade downloads through qvcp, which is not loaded; dot-source qvcp.ps1 first"
     }
 
@@ -122,8 +122,9 @@ function ytxa {
         }
     }
 
-    # yt-dlp's wording when a video needs a signed-in session. Anything else
-    # (removed, private-and-not-yours, region-locked) is not worth a retry.
+    # yt-dlp's wording when a signed-in session might help: age gates,
+    # members-only, and private videos, which resolve if the account is the
+    # owner. Removed or region-locked videos are not worth a retry.
     $NEEDS_SIGN_IN = 'Sign in to confirm|Private video|members-only|Join this channel|This video may be inappropriate'
 
     # yt-dlp ranks resolution by the smaller dimension, so portrait video is
@@ -324,13 +325,12 @@ function ytxa {
                             $row.ResStatus = 'Unavailable'
                             $row.Note      = 'no video formats offered'
                         }
-                        elseif ($best -gt $row.Res) {
-                            $row.ResStatus = 'Upgrade'
-                            $row.Note      = if ($WithCookies) { 'resolved with cookies; the ladder may be under-reported' } else { $null }
-                        }
                         else {
-                            $row.ResStatus = 'OK'
-                            $row.Note      = if ($WithCookies) { 'resolved with cookies; the ladder may be under-reported' } else { $null }
+                            $row.ResStatus = if ($best -gt $row.Res) { 'Upgrade' } else { 'OK' }
+                            # Only worth saying when cookies were a fallback the
+                            # caller did not ask for; under -UseCookies it is
+                            # the whole run and the caveat is already known.
+                            $row.Note = if ($WithCookies -and -not $UseCookies) { 'resolved with cookies; the ladder may be under-reported' } else { $null }
                         }
                     }
                 }
@@ -373,10 +373,16 @@ function ytxa {
             $url   = "https://www.youtube.com/watch?v=$($row.Id)"
 
             # yt-dlp refuses to overwrite a same-named file ("has already been
-            # downloaded"), so the old one is moved aside for the duration.
-            Move-Item -LiteralPath $row.Path -Destination $aside -Force
+            # downloaded"), so the old one is moved aside for the duration. A
+            # locked file must fail here, loudly: were the move to fail softly,
+            # yt-dlp would skip the download and the old file would then be
+            # mistaken for the new one.
+            $movedAside = $false
             $newFile = $null
             try {
+                Move-Item -LiteralPath $row.Path -Destination $aside -Force -ErrorAction Stop
+                $movedAside = $true
+
                 if ($ytDlpCookiesPath) { qvcp -Y $url -OutDir $dir } else { qvcp -G $url -OutDir $dir }
 
                 # The new name is whatever yt-dlp chose (the title may have
@@ -391,20 +397,31 @@ function ytxa {
             }
             catch {
                 $row.UpgradeStatus = 'Failed'
-                $row.Note = "$_"
+                $row.Note = if ($row.Note) { "$_ (before the upgrade: $($row.Note))" } else { "$_" }
                 Write-Warning "Upgrade of '$($row.Path)' failed: $_"
-                try {
-                    Move-Item -LiteralPath $aside -Destination $row.Path
-                }
-                catch {
-                    Write-Warning "Could not restore '$($row.Path)' from '$aside': $_"
+                if ($movedAside) {
+                    # No -Force: anything now sitting at the original name was
+                    # produced by the download and must not be overwritten.
+                    # Failing here leaves both files and says so.
+                    try {
+                        Move-Item -LiteralPath $aside -Destination $row.Path -ErrorAction Stop
+                    }
+                    catch {
+                        Write-Warning "Could not restore '$($row.Path)' from '$aside': $_"
+                    }
                 }
                 continue
             }
 
-            Remove-Item -LiteralPath $aside -Force
             $row.UpgradeStatus = 'Upgraded'
             $row.NewPath       = $newFile.FullName
+            try {
+                Remove-Item -LiteralPath $aside -Force -ErrorAction Stop
+            }
+            catch {
+                $row.Note = "old file could not be removed, still at '$aside': $_"
+                Write-Warning $row.Note
+            }
         }
         Write-Progress -Activity 'Upgrading' -Completed
     }

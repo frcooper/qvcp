@@ -80,7 +80,11 @@ function ytup {
                 $out | Write-Host
                 $text = $out -join "`n"
             }
-            if ($text -notmatch 'Successfully installed|No available upgrade found|No newer package versions|is up to date') {
+            # winget exits non-zero for "nothing to upgrade" (0x8A15002B), so
+            # the text is the primary signal; but a success phrase paired with
+            # a non-zero exit is still a failure (a dependency step, say).
+            $nothingToDo = $text -match 'No available upgrade found|No newer package versions|is up to date'
+            if (-not $nothingToDo -and ($text -notmatch 'Successfully installed' -or $LASTEXITCODE -ne 0)) {
                 throw "winget did not report success (exit code $LASTEXITCODE)"
             }
             if (Get-Command 'yt-dlp' -ErrorAction SilentlyContinue) {
@@ -146,8 +150,13 @@ function ytup {
                 $dest = Join-Path $PluginDir $PLUGIN_ZIP
                 Invoke-WebRequest -Uri $asset[0].browser_download_url -OutFile $dest -Headers @{ 'User-Agent' = 'ytup' }
                 $versions['plugin'] = Get-YtupPluginVersion -ZipPath $dest
-                if ($versions['plugin'] -ne $tag) {
-                    Write-Warning "plugin zip reports version '$($versions['plugin'])' but the release tag is '$tag'"
+                if (-not $versions['plugin']) {
+                    # The zip layout or version line changed upstream; the
+                    # plugin is probably fine, but the match cannot be checked.
+                    Write-Warning "could not read __version__ from '$dest'; provider/plugin match not verified"
+                }
+                elseif ($versions['plugin'] -ne $tag) {
+                    throw "plugin zip is version '$($versions['plugin'])' but the release tag is '$tag'"
                 }
             }
         }
