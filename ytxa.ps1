@@ -52,10 +52,12 @@ function ytxa {
         # network.
         [switch]$NoResolutionCheck,
 
-        # Query YouTube with the qvcp cookies file. Off by default: signed-in
-        # clients are SABR-restricted and under-report the format ladder, so
-        # an unauthenticated query is the more honest "best available".
-        # Turn it on for members-only or age-gated videos.
+        # Query YouTube with the qvcp cookies file from the start. Off by
+        # default: signed-in clients are SABR-restricted and under-report the
+        # format ladder, so an unauthenticated query is the more honest "best
+        # available". Even when off, ids that YouTube refuses without a
+        # sign-in (age-gated, private, members-only) are retried with the
+        # cookies file if it exists.
         [switch]$UseCookies,
 
         # URLs per yt-dlp invocation. yt-dlp's start-up cost is amortised
@@ -90,13 +92,21 @@ function ytxa {
         if (-not (Get-Command 'yt-dlp' -ErrorAction SilentlyContinue)) {
             throw "yt-dlp not found on PATH"
         }
-        if ($UseCookies) {
-            $ytDlpCookiesPath = Join-Path ([Environment]::GetFolderPath('MyDocuments')) $YTDLP_COOKIES_FILE
-            if (-not (Test-Path -LiteralPath $ytDlpCookiesPath -PathType Leaf)) {
+        # The cookies file is optional unless -UseCookies demands it: without
+        # the switch it only serves the sign-in retry, and its absence simply
+        # leaves those ids Unavailable with yt-dlp's reason.
+        $ytDlpCookiesPath = Join-Path ([Environment]::GetFolderPath('MyDocuments')) $YTDLP_COOKIES_FILE
+        if (-not (Test-Path -LiteralPath $ytDlpCookiesPath -PathType Leaf)) {
+            if ($UseCookies) {
                 throw "Cookies file not found: '$ytDlpCookiesPath'"
             }
+            $ytDlpCookiesPath = $null
         }
     }
+
+    # yt-dlp's wording when a video needs a signed-in session. Anything else
+    # (removed, private-and-not-yours, region-locked) is not worth a retry.
+    $NEEDS_SIGN_IN = 'Sign in to confirm|Private video|members-only|Join this channel|This video may be inappropriate'
 
     # yt-dlp ranks resolution by the smaller dimension, so portrait video is
     # measured the same way here.
@@ -236,71 +246,90 @@ function ytxa {
             $row.ResStatus = 'Unavailable'   # until yt-dlp says otherwise
         }
 
-        $ids = @($byQueryId.Keys | Sort-Object)
-        $batches = [Math]::Ceiling($ids.Count / $BatchSize)
-        for ($b = 0; $b -lt $batches; $b++) {
-            $chunk = $ids[($b * $BatchSize)..([Math]::Min(($b + 1) * $BatchSize, $ids.Count) - 1)]
-            Write-Progress -Activity 'Querying YouTube' -Status ("batch {0} of {1}" -f ($b + 1), $batches) -PercentComplete (100 * $b / $batches)
+        # One pass over a set of ids, with or without cookies, updating the
+        # rows in place. Runs twice at most: once for everything, then once
+        # more with cookies for the ids YouTube refused without a sign-in.
+        function Invoke-YtDlpQuery([string[]]$Ids, [bool]$WithCookies, [string]$Activity) {
+            $batches = [Math]::Ceiling($Ids.Count / $BatchSize)
+            for ($b = 0; $b -lt $batches; $b++) {
+                $chunk = $Ids[($b * $BatchSize)..([Math]::Min(($b + 1) * $BatchSize, $Ids.Count) - 1)]
+                Write-Progress -Activity $Activity -Status ("batch {0} of {1}" -f ($b + 1), $batches) -PercentComplete (100 * $b / $batches)
 
-            $ytDlpArgs = @('--ignore-config')
-            if ($UseCookies) {
-                $ytDlpArgs += @('--cookies', $ytDlpCookiesPath)
-            }
-            else {
-                $ytDlpArgs += @('--no-cookies', '--no-cookies-from-browser')
-            }
-            # -j prints one JSON document per video and never downloads.
-            # Errors for individual videos go to stderr and yt-dlp carries on
-            # with the rest of the batch, so both streams are captured.
-            $ytDlpArgs += @('-j', '--no-warnings')
-            $ytDlpArgs += @($chunk | ForEach-Object { "https://www.youtube.com/watch?v=$_" })
+                $ytDlpArgs = @('--ignore-config')
+                if ($WithCookies) {
+                    $ytDlpArgs += @('--cookies', $ytDlpCookiesPath)
+                }
+                else {
+                    $ytDlpArgs += @('--no-cookies', '--no-cookies-from-browser')
+                }
+                # -j prints one JSON document per video and never downloads.
+                # Errors for individual videos go to stderr and yt-dlp carries on
+                # with the rest of the batch, so both streams are captured.
+                $ytDlpArgs += @('-j', '--no-warnings')
+                $ytDlpArgs += @($chunk | ForEach-Object { "https://www.youtube.com/watch?v=$_" })
 
-            Write-Verbose ("yt-dlp " + ($ytDlpArgs -join ' '))
-            $output = @(& yt-dlp @ytDlpArgs 2>&1)
+                Write-Verbose ("yt-dlp " + ($ytDlpArgs -join ' '))
+                $output = @(& yt-dlp @ytDlpArgs 2>&1)
 
-            foreach ($line in $output) {
-                $text = [string]$line
-                if ($line -is [System.Management.Automation.ErrorRecord] -or $text -like 'ERROR:*') {
-                    # ERROR: [youtube] <id>: <reason>
-                    $m = [regex]::Match($text, '^ERROR:\s*(?:\[[^\]]+\]\s*)?(?<id>[A-Za-z0-9_-]{11}):\s*(?<reason>.*)$')
-                    if ($m.Success -and $byQueryId.ContainsKey($m.Groups['id'].Value)) {
-                        foreach ($row in $byQueryId[$m.Groups['id'].Value]) {
-                            $row.Note = $m.Groups['reason'].Value.Trim()
+                foreach ($line in $output) {
+                    $text = [string]$line
+                    if ($line -is [System.Management.Automation.ErrorRecord] -or $text -like 'ERROR:*') {
+                        # ERROR: [youtube] <id>: <reason>
+                        $m = [regex]::Match($text, '^ERROR:\s*(?:\[[^\]]+\]\s*)?(?<id>[A-Za-z0-9_-]{11}):\s*(?<reason>.*)$')
+                        if ($m.Success -and $byQueryId.ContainsKey($m.Groups['id'].Value)) {
+                            foreach ($row in $byQueryId[$m.Groups['id'].Value]) {
+                                $row.Note = $m.Groups['reason'].Value.Trim()
+                            }
+                        }
+                        else {
+                            Write-Warning $text
+                        }
+                        continue
+                    }
+
+                    if (-not $text.StartsWith('{')) { continue }
+                    try { $info = $text | ConvertFrom-Json } catch { Write-Warning "unparseable yt-dlp output: $($text.Substring(0, [Math]::Min(80, $text.Length)))"; continue }
+                    if (-not $info.id -or -not $byQueryId.ContainsKey([string]$info.id)) { continue }
+
+                    $best = $null
+                    foreach ($f in @($info.formats)) {
+                        if ($f.vcodec -eq 'none') { continue }
+                        $r = Get-Res $f.width $f.height
+                        if ($r -and (-not $best -or $r -gt $best)) { $best = $r }
+                    }
+
+                    foreach ($row in $byQueryId[[string]$info.id]) {
+                        $row.BestRes = $best
+                        if (-not $best) {
+                            $row.ResStatus = 'Unavailable'
+                            $row.Note      = 'no video formats offered'
+                        }
+                        elseif ($best -gt $row.Res) {
+                            $row.ResStatus = 'Upgrade'
+                            $row.Note      = if ($WithCookies) { 'resolved with cookies; the ladder may be under-reported' } else { $null }
+                        }
+                        else {
+                            $row.ResStatus = 'OK'
+                            $row.Note      = if ($WithCookies) { 'resolved with cookies; the ladder may be under-reported' } else { $null }
                         }
                     }
-                    else {
-                        Write-Warning $text
-                    }
-                    continue
-                }
-
-                if (-not $text.StartsWith('{')) { continue }
-                try { $info = $text | ConvertFrom-Json } catch { Write-Warning "unparseable yt-dlp output: $($text.Substring(0, [Math]::Min(80, $text.Length)))"; continue }
-                if (-not $info.id -or -not $byQueryId.ContainsKey([string]$info.id)) { continue }
-
-                $best = $null
-                foreach ($f in @($info.formats)) {
-                    if ($f.vcodec -eq 'none') { continue }
-                    $r = Get-Res $f.width $f.height
-                    if ($r -and (-not $best -or $r -gt $best)) { $best = $r }
-                }
-
-                foreach ($row in $byQueryId[[string]$info.id]) {
-                    $row.BestRes = $best
-                    if (-not $best) {
-                        $row.ResStatus = 'Unavailable'
-                        $row.Note      = 'no video formats offered'
-                    }
-                    elseif ($best -gt $row.Res) {
-                        $row.ResStatus = 'Upgrade'
-                    }
-                    else {
-                        $row.ResStatus = 'OK'
-                    }
                 }
             }
+            Write-Progress -Activity $Activity -Completed
         }
-        Write-Progress -Activity 'Querying YouTube' -Completed
+
+        $ids = @($byQueryId.Keys | Sort-Object)
+        Invoke-YtDlpQuery $ids ([bool]$UseCookies) 'Querying YouTube'
+
+        if (-not $UseCookies -and $ytDlpCookiesPath) {
+            $retry = @($ids | Where-Object {
+                $rowsForId = $byQueryId[$_]
+                $rowsForId[0].ResStatus -eq 'Unavailable' -and $rowsForId[0].Note -match $NEEDS_SIGN_IN
+            })
+            if ($retry.Count -gt 0) {
+                Invoke-YtDlpQuery $retry $true 'Retrying with cookies'
+            }
+        }
 
         foreach ($row in $pending) {
             if ($row.ResStatus -eq 'Unavailable' -and -not $row.Note) {

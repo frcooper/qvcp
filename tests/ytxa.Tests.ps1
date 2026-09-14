@@ -39,12 +39,22 @@ BeforeAll {
     }
 
     # Format table: id -> int[] of resolutions on offer (as min(width,height)).
+    # Ids in $YtxaGated answer only when --cookies is on the command line,
+    # failing with yt-dlp's sign-in wording otherwise.
     function global:yt-dlp {
         $global:YtxaYtDlpCalls += , ([string[]]$args)
         $global:LASTEXITCODE = 0
+        $withCookies = [string[]]$args -contains '--cookies'
         foreach ($a in $args) {
             if ($a -notmatch 'watch\?v=(?<id>[A-Za-z0-9_-]{11})$') { continue }
             $id = $Matches['id']
+            if ($global:YtxaGated -contains $id -and -not $withCookies) {
+                [System.Management.Automation.ErrorRecord]::new(
+                    [Exception]::new("ERROR: [youtube] ${id}: Sign in to confirm your age. Use --cookies-from-browser or --cookies for the authentication."),
+                    'NativeCommandError', 'FromStdErr', $null)
+                $global:LASTEXITCODE = 1
+                continue
+            }
             if (-not $global:YtxaFormats.ContainsKey($id)) {
                 # What a native command's stderr looks like after 2>&1: an
                 # ErrorRecord whose ToString() is the line. Emitted on the
@@ -69,6 +79,7 @@ BeforeAll {
         $global:YtxaYtDlpCalls = @()
         $global:YtxaProbe      = @{}
         $global:YtxaFormats    = @{}
+        $global:YtxaGated      = @()
         Get-ChildItem -LiteralPath $global:YtxaRoot -Force | Remove-Item -Recurse -Force
     }
 
@@ -94,7 +105,7 @@ AfterAll {
         Remove-Item -LiteralPath $global:YtxaRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
     Remove-Variable -Name YtxaRoot, YtxaProbeCalls, YtxaYtDlpCalls, YtxaProbe,
-        YtxaFormats, YtxaHasCookies -Scope Global -ErrorAction SilentlyContinue
+        YtxaFormats, YtxaGated, YtxaHasCookies -Scope Global -ErrorAction SilentlyContinue
 }
 
 Describe 'ytxa file discovery' {
@@ -396,6 +407,60 @@ Describe 'ytxa resolution check' {
         $global:YtxaYtDlpCalls.Count | Should -Be 1
         (Get-YtxaUrls $global:YtxaYtDlpCalls[0]).Count | Should -Be 1
         $rows.ResStatus | Should -Be @('Upgrade', 'Upgrade')
+    }
+
+    It 'retries ids that need a sign-in with cookies, and only those' -Skip:(-not $global:YtxaHasCookies) {
+        New-YtxaFile 'gated [aaaaaaaaaaa].mp4' -Width 1280 -Height 720 | Out-Null
+        New-YtxaFile 'open [bbbbbbbbbbb].mp4' -Width 1920 -Height 1080 | Out-Null
+        New-YtxaFile 'gone [ccccccccccc].mp4' | Out-Null
+        $global:YtxaGated = @('aaaaaaaaaaa')
+        $global:YtxaFormats['aaaaaaaaaaa'] = 1080
+        $global:YtxaFormats['bbbbbbbbbbb'] = 1080
+
+        $rows = @(ytxa $global:YtxaRoot 6>$null)
+
+        $global:YtxaYtDlpCalls.Count | Should -Be 2
+        $global:YtxaYtDlpCalls[0] | Should -Contain '--no-cookies'
+        $global:YtxaYtDlpCalls[1] | Should -Contain '--cookies'
+        Get-YtxaUrls $global:YtxaYtDlpCalls[1] | Should -Be @('https://www.youtube.com/watch?v=aaaaaaaaaaa')
+
+        $rows[0].ResStatus | Should -Be 'Upgrade'          # gated, resolved on retry
+        $rows[0].Note      | Should -Match 'cookies'
+        $rows[1].ResStatus | Should -Be 'Unavailable'      # gone: not a sign-in problem
+        $rows[1].Note      | Should -Be 'This video is unavailable'
+        $rows[2].ResStatus | Should -Be 'OK'               # open: first pass, no note
+        $rows[2].Note      | Should -BeNullOrEmpty
+    }
+
+    It 'does not retry when nothing needed a sign-in' -Skip:(-not $global:YtxaHasCookies) {
+        New-YtxaFile 'gone [aaaaaaaaaaa].mp4' | Out-Null
+
+        ytxa $global:YtxaRoot 6>$null | Out-Null
+
+        $global:YtxaYtDlpCalls.Count | Should -Be 1
+    }
+
+    It '-UseCookies queries everything with cookies in a single pass' -Skip:(-not $global:YtxaHasCookies) {
+        New-YtxaFile 'gated [aaaaaaaaaaa].mp4' | Out-Null
+        $global:YtxaGated = @('aaaaaaaaaaa')
+        $global:YtxaFormats['aaaaaaaaaaa'] = 1080
+
+        $rows = @(ytxa $global:YtxaRoot -UseCookies 6>$null)
+
+        $global:YtxaYtDlpCalls.Count | Should -Be 1
+        $rows[0].ResStatus | Should -Be 'OK'
+    }
+
+    It 'leaves sign-in failures Unavailable when there is no cookies file' -Skip:$global:YtxaHasCookies {
+        New-YtxaFile 'gated [aaaaaaaaaaa].mp4' | Out-Null
+        $global:YtxaGated = @('aaaaaaaaaaa')
+        $global:YtxaFormats['aaaaaaaaaaa'] = 1080
+
+        $rows = @(ytxa $global:YtxaRoot 6>$null)
+
+        $global:YtxaYtDlpCalls.Count | Should -Be 1
+        $rows[0].ResStatus | Should -Be 'Unavailable'
+        $rows[0].Note      | Should -Match 'Sign in'
     }
 
     It 'does not query files ffprobe could not read' {
