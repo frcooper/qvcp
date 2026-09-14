@@ -108,7 +108,7 @@ Drop the copied HLS/DASH URL straight into `qvcp` to build an `mp4` that’s rea
 ytxa                                        # the qvcp output root
 ytxa D:\clips                               # any tree
 ytxa '.\Some Clip [LY5YF8LgHy0].mp4'        # one file
-ytxa D:\clips\*Girls* *.mkv                  # filespecs, matched recursively
+ytxa D:\clips\*Girls* *.mkv                 # filespecs, matched recursively
 ytxa -MissingSourceUrl -NoResolutionCheck   # offline: files whose id is only in the name
 ytxa | Where-Object ResStatus -eq Upgrade | Select-Object Path, Res, BestRes
 ```
