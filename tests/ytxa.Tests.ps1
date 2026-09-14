@@ -89,6 +89,12 @@ BeforeAll {
         }
         $name = if ($global:YtxaQvcpNames.ContainsKey($id)) { $global:YtxaQvcpNames[$id] } else { "new [$id].mp4" }
         Set-Content -LiteralPath (Join-Path $dir $name) -Value 'new' -NoNewline
+        if ($global:YtxaHoldAside) {
+            # Pin the moved-aside file open so ytxa's cleanup Remove-Item fails.
+            # The test disposes $YtxaAsideHandle afterwards.
+            $aside = Get-ChildItem -LiteralPath $dir -Filter '*.ytxa-old' | Select-Object -First 1
+            $global:YtxaAsideHandle = [System.IO.File]::Open($aside.FullName, 'Open', 'Read', 'None')
+        }
     }
 
     function global:Reset-YtxaState {
@@ -97,6 +103,8 @@ BeforeAll {
         $global:YtxaQvcpCalls  = @()
         $global:YtxaQvcpFails  = @()
         $global:YtxaQvcpNames  = @{}
+        $global:YtxaHoldAside  = $false
+        $global:YtxaAsideHandle = $null
         $global:YtxaProbe      = @{}
         $global:YtxaFormats    = @{}
         $global:YtxaGated      = @()
@@ -124,7 +132,8 @@ AfterAll {
     if ($global:YtxaRoot -and (Test-Path -LiteralPath $global:YtxaRoot)) {
         Remove-Item -LiteralPath $global:YtxaRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
-    Remove-Variable -Name YtxaRoot, YtxaProbeCalls, YtxaYtDlpCalls, YtxaQvcpCalls, YtxaQvcpFails, YtxaQvcpNames, YtxaProbe,
+    Remove-Variable -Name YtxaRoot, YtxaProbeCalls, YtxaYtDlpCalls, YtxaQvcpCalls, YtxaQvcpFails, YtxaQvcpNames,
+        YtxaHoldAside, YtxaAsideHandle, YtxaProbe,
         YtxaFormats, YtxaGated, YtxaHasCookies -Scope Global -ErrorAction SilentlyContinue
 }
 
@@ -633,6 +642,26 @@ Describe 'ytxa -Upgrade' {
         $global:YtxaQvcpCalls.Count | Should -Be 0
         Test-Path -LiteralPath $old | Should -BeTrue
         Test-Path -LiteralPath "$old.ytxa-old" | Should -BeFalse
+    }
+
+    It 'reports a leftover .ytxa-old without losing the earlier note' -Skip:(-not $global:YtxaHasCookies) {
+        $old = New-YtxaFile 'gated [aaaaaaaaaaa].mp4' -Width 1280 -Height 720
+        $global:YtxaGated = @('aaaaaaaaaaa')
+        $global:YtxaFormats['aaaaaaaaaaa'] = 1080
+        $global:YtxaHoldAside = $true
+
+        try {
+            $row = @(ytxa $global:YtxaRoot -Upgrade -WarningAction SilentlyContinue 6>$null)[0]
+        }
+        finally {
+            if ($global:YtxaAsideHandle) { $global:YtxaAsideHandle.Dispose() }
+        }
+
+        $row.UpgradeStatus | Should -Be 'Upgraded'              # the download itself succeeded
+        $row.NewPath       | Should -BeLike '*new [[]aaaaaaaaaaa[]].mp4'
+        $row.Note          | Should -Match 'could not be removed'
+        $row.Note          | Should -Match 'before the upgrade: resolved with cookies'
+        Test-Path -LiteralPath "$old.ytxa-old" | Should -BeTrue
     }
 
     It 'continues with the next file after a failure' {

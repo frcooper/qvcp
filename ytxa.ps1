@@ -362,6 +362,13 @@ function ytxa {
 
     if ($Upgrade) {
         $ASIDE_SUFFIX = '.ytxa-old'
+
+        # The resolution pass may already have left a note on the row (the
+        # cookies caveat); anything the upgrade adds goes in front of it
+        # rather than over it.
+        function Add-UpgradeNote($Row, [string]$Message) {
+            $Row.Note = if ($Row.Note) { "$Message (before the upgrade: $($Row.Note))" } else { $Message }
+        }
         $todo = @($rows | Where-Object ResStatus -eq 'Upgrade')
         $i = 0
         foreach ($row in $todo) {
@@ -397,7 +404,7 @@ function ytxa {
             }
             catch {
                 $row.UpgradeStatus = 'Failed'
-                $row.Note = if ($row.Note) { "$_ (before the upgrade: $($row.Note))" } else { "$_" }
+                Add-UpgradeNote $row "$_"
                 Write-Warning "Upgrade of '$($row.Path)' failed: $_"
                 if ($movedAside) {
                     # No -Force: anything now sitting at the original name was
@@ -419,8 +426,8 @@ function ytxa {
                 Remove-Item -LiteralPath $aside -Force -ErrorAction Stop
             }
             catch {
-                $row.Note = "old file could not be removed, still at '$aside': $_"
-                Write-Warning $row.Note
+                Add-UpgradeNote $row "old file could not be removed, still at '$aside': $_"
+                Write-Warning "old file could not be removed, still at '$aside': $_"
             }
         }
         Write-Progress -Activity 'Upgrading' -Completed
