@@ -2,11 +2,13 @@
 
 # Tests for the `ytxa` PowerShell helper.
 #
-# `ffprobe` and `yt-dlp` are replaced with global stub functions, as in
-# qvcp.Tests.ps1. The ffprobe stub answers from a per-file table of tags and
-# dimensions; the yt-dlp stub answers from a per-id table of available
-# resolutions and reports unknown ids the way yt-dlp does, on stderr. The
-# files under test are empty placeholders in a temp tree.
+# `ffprobe`, `yt-dlp` and `ffmpeg` are replaced with global stub functions,
+# as in qvcp.Tests.ps1. The ffprobe stub answers from a per-file table of
+# tags, dimensions and duration; the yt-dlp stub answers from a per-id table
+# of available resolutions and reports unknown ids the way yt-dlp does, on
+# stderr; the ffmpeg stub writes its output file and registers it in the
+# probe table with the comment it was given. The files under test are empty
+# placeholders in a temp tree.
 
 BeforeDiscovery {
     $global:YtxaHasCookies = Test-Path -LiteralPath (
@@ -20,8 +22,9 @@ BeforeAll {
     $global:YtxaRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('ytxa-tests-' + [Guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $global:YtxaRoot -Force | Out-Null
 
-    # Probe table: leaf file name -> @{ Tags = @{...}; Width = ; Height = }.
-    # A file absent from the table is reported as unreadable (ffprobe exit 1).
+    # Probe table: leaf file name -> @{ Tags = @{...}; Width = ; Height = ;
+    # Duration = }. A file absent from the table is reported as unreadable
+    # (ffprobe exit 1).
     function global:ffprobe {
         $global:YtxaProbeCalls += , ([string[]]$args)
         $file = [System.IO.Path]::GetFileName([string]$args[-1])
@@ -34,13 +37,17 @@ BeforeAll {
         if ($entry.Width) {
             $streams += @{ codec_type = 'video'; width = $entry.Width; height = $entry.Height }
         }
+        $format = @{ tags = $entry.Tags }
+        if ($entry.Duration) { $format.duration = '{0:0.000000}' -f $entry.Duration }   # ffprobe prints it as a string
         $global:LASTEXITCODE = 0
-        @{ streams = $streams; format = @{ tags = $entry.Tags } } | ConvertTo-Json -Depth 5
+        @{ streams = $streams; format = $format } | ConvertTo-Json -Depth 5
     }
 
     # Format table: id -> int[] of resolutions on offer (as min(width,height)).
     # Ids in $YtxaGated answer only when --cookies is on the command line,
-    # failing with yt-dlp's sign-in wording otherwise.
+    # failing with yt-dlp's sign-in wording otherwise. The reported duration
+    # is 100 (matching New-YtxaFile's default) unless $YtxaDurations says
+    # otherwise; an explicit $null there leaves it out, as for a live stream.
     function global:yt-dlp {
         $global:YtxaYtDlpCalls += , ([string[]]$args)
         $global:LASTEXITCODE = 0
@@ -70,8 +77,39 @@ BeforeAll {
             foreach ($res in $global:YtxaFormats[$id]) {
                 $formats += @{ vcodec = 'avc1'; width = [int](16 * $res / 9); height = $res }
             }
-            @{ id = $id; formats = $formats } | ConvertTo-Json -Compress -Depth 5
+            $duration = if ($global:YtxaDurations.ContainsKey($id)) { $global:YtxaDurations[$id] } else { 100 }
+            @{ id = $id; webpage_url = "https://www.youtube.com/watch?v=$id"; duration = $duration; formats = $formats } |
+                ConvertTo-Json -Compress -Depth 5
         }
+    }
+
+    # Stand-in for ffmpeg as ytxa -Upgrade uses it to write the SourceURL
+    # comment: records its arguments, writes the output file, and registers
+    # that file in the probe table carrying the comment it was given, so the
+    # read-back check passes. Ids in $YtxaFfmpegFails make it exit 1; ids in
+    # $YtxaFfmpegDropsTag write the file but register it without the comment.
+    function global:ffmpeg {
+        $global:YtxaFfmpegCalls += , ([string[]]$args)
+        $a   = [string[]]$args
+        $in  = $a[[Array]::IndexOf($a, '-i') + 1]
+        $out = $a[-1]
+        $id  = [regex]::Match([System.IO.Path]::GetFileName($in), '\[(?<id>[A-Za-z0-9_-]{11})\]').Groups['id'].Value
+        if ($global:YtxaFfmpegFails -contains $id) {
+            [System.Management.Automation.ErrorRecord]::new(
+                [Exception]::new("Error opening output file $out."),
+                'NativeCommandError', 'FromStdErr', $null)
+            $global:LASTEXITCODE = 1
+            return
+        }
+        $comment = $null
+        for ($i = 0; $i -lt $a.Count - 1; $i++) {
+            if ($a[$i] -eq '-metadata' -and $a[$i + 1] -like 'comment=*') { $comment = $a[$i + 1].Substring('comment='.Length) }
+        }
+        Set-Content -LiteralPath $out -Value 'tagged' -NoNewline
+        $tags = @{}
+        if ($comment -and $global:YtxaFfmpegDropsTag -notcontains $id) { $tags.comment = $comment }
+        $global:YtxaProbe[[System.IO.Path]::GetFileName($out)] = @{ Tags = $tags; Width = 1920; Height = 1080; Duration = 100 }
+        $global:LASTEXITCODE = 0
     }
 
     # Stand-in for the real qvcp: records its arguments and, unless the id is
@@ -107,6 +145,10 @@ BeforeAll {
         $global:YtxaQvcpFails  = @()
         $global:YtxaQvcpNames  = @{}
         $global:YtxaHoldAside  = $false
+        $global:YtxaFfmpegCalls    = @()
+        $global:YtxaFfmpegFails    = @()
+        $global:YtxaFfmpegDropsTag = @()
+        $global:YtxaDurations      = @{}
         # A test that failed before its finally block may have left the pinned
         # handle open, which would lock the temp tree for the rest of the run.
         if ($global:YtxaAsideHandle) { $global:YtxaAsideHandle.Dispose() }
@@ -118,11 +160,11 @@ BeforeAll {
     }
 
     function global:New-YtxaFile {
-        param([string]$RelativePath, [hashtable]$Tags = @{}, [int]$Width = 1920, [int]$Height = 1080)
+        param([string]$RelativePath, [hashtable]$Tags = @{}, [int]$Width = 1920, [int]$Height = 1080, [double]$Duration = 100)
         $full = Join-Path $global:YtxaRoot $RelativePath
         New-Item -ItemType Directory -Path (Split-Path $full) -Force | Out-Null
         Set-Content -LiteralPath $full -Value '' -NoNewline
-        $global:YtxaProbe[[System.IO.Path]::GetFileName($full)] = @{ Tags = $Tags; Width = $Width; Height = $Height }
+        $global:YtxaProbe[[System.IO.Path]::GetFileName($full)] = @{ Tags = $Tags; Width = $Width; Height = $Height; Duration = $Duration }
         $full
     }
 
@@ -132,14 +174,14 @@ BeforeAll {
 }
 
 AfterAll {
-    foreach ($name in 'ffprobe', 'yt-dlp', 'qvcp', 'Reset-YtxaState', 'New-YtxaFile', 'Get-YtxaUrls') {
+    foreach ($name in 'ffprobe', 'yt-dlp', 'ffmpeg', 'qvcp', 'Reset-YtxaState', 'New-YtxaFile', 'Get-YtxaUrls') {
         Remove-Item -Path "function:$name" -ErrorAction SilentlyContinue
     }
     if ($global:YtxaRoot -and (Test-Path -LiteralPath $global:YtxaRoot)) {
         Remove-Item -LiteralPath $global:YtxaRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
     Remove-Variable -Name YtxaRoot, YtxaProbeCalls, YtxaYtDlpCalls, YtxaQvcpCalls, YtxaQvcpFails, YtxaQvcpNames,
-        YtxaHoldAside, YtxaAsideHandle, YtxaProbe,
+        YtxaHoldAside, YtxaAsideHandle, YtxaProbe, YtxaFfmpegCalls, YtxaFfmpegFails, YtxaFfmpegDropsTag, YtxaDurations,
         YtxaFormats, YtxaGated, YtxaHasCookies -Scope Global -ErrorAction SilentlyContinue
 }
 
@@ -681,5 +723,226 @@ Describe 'ytxa -Upgrade' {
 
         $rows.UpgradeStatus | Should -Be @('Failed', 'Upgraded')
         $global:YtxaQvcpCalls.Count | Should -Be 2
+    }
+}
+
+Describe 'ytxa -Upgrade SourceURL tagging' {
+
+    BeforeEach { Reset-YtxaState }
+
+    It 'refuses to run without ffmpeg on PATH' {
+        # The stub is a function, but a real ffmpeg may be on PATH too, so
+        # that is emptied as well for the duration.
+        $saved     = Get-Item function:ffmpeg
+        $savedPath = $env:PATH
+        Remove-Item function:ffmpeg
+        try {
+            $env:PATH = ''
+            { ytxa $global:YtxaRoot -Upgrade 6>$null } |
+                Should -Throw -ExpectedMessage '*ffmpeg*not on PATH*'
+        }
+        finally {
+            $env:PATH = $savedPath
+            Set-Item function:global:ffmpeg $saved.ScriptBlock
+        }
+    }
+
+    It 'writes the derived URL into a current, untagged file via a -c copy remux' {
+        $file = New-YtxaFile 'best [aaaaaaaaaaa].mp4' -Width 3840 -Height 2160
+        $global:YtxaFormats['aaaaaaaaaaa'] = 2160
+
+        $row = @(ytxa $global:YtxaRoot -Upgrade 6>$null)[0]
+
+        $global:YtxaQvcpCalls.Count   | Should -Be 0
+        $global:YtxaFfmpegCalls.Count | Should -Be 1
+        $call = $global:YtxaFfmpegCalls[0]
+        $call[[Array]::IndexOf($call, '-i') + 1] | Should -Be $file
+        $call | Should -Contain '-map'
+        $call | Should -Contain 'copy'
+        $call | Should -Contain 'comment=[[SourceURL|https://www.youtube.com/watch?v=aaaaaaaaaaa]]'
+        $call[-1] | Should -Be (Join-Path $global:YtxaRoot 'best [aaaaaaaaaaa].ytxa-new.mp4')
+
+        $row.SourceUrlStatus | Should -Be 'Added'
+        $row.SourceUrl       | Should -Be 'https://www.youtube.com/watch?v=aaaaaaaaaaa'
+        $row.UpgradeStatus   | Should -BeNullOrEmpty
+        $row.Note            | Should -BeNullOrEmpty
+        Get-Content -LiteralPath $file -Raw | Should -Be 'tagged'         # the remuxed file replaced the original
+        Test-Path -LiteralPath $call[-1] | Should -BeFalse                # and the temporary name is gone
+        Test-Path -LiteralPath "$file.ytxa-old" | Should -BeFalse         # as is the moved-aside original
+    }
+
+    It 'reads the comment back from the temporary file before replacing the original' {
+        New-YtxaFile 'best [aaaaaaaaaaa].mp4' -Width 3840 -Height 2160 | Out-Null
+        $global:YtxaFormats['aaaaaaaaaaa'] = 2160
+
+        ytxa $global:YtxaRoot -Upgrade 6>$null | Out-Null
+
+        $probed = @($global:YtxaProbeCalls | ForEach-Object { [System.IO.Path]::GetFileName($_[-1]) })
+        $probed | Should -Contain 'best [aaaaaaaaaaa].ytxa-new.mp4'
+    }
+
+    It 'keeps an existing comment behind the sigil' {
+        New-YtxaFile 'best [aaaaaaaaaaa].mp4' -Width 3840 -Height 2160 -Tags @{ comment = 'from the description' } | Out-Null
+        $global:YtxaFormats['aaaaaaaaaaa'] = 2160
+
+        ytxa $global:YtxaRoot -Upgrade 6>$null | Out-Null
+
+        $global:YtxaFfmpegCalls[0] | Should -Contain "comment=[[SourceURL|https://www.youtube.com/watch?v=aaaaaaaaaaa]]`nfrom the description"
+    }
+
+    It 'carries the original timestamps over to the remuxed file' {
+        $file = New-YtxaFile 'best [aaaaaaaaaaa].mp4' -Width 3840 -Height 2160
+        $global:YtxaFormats['aaaaaaaaaaa'] = 2160
+        $then = [DateTime]::new(2020, 1, 2, 3, 4, 5, [DateTimeKind]::Utc)
+        (Get-Item -LiteralPath $file).LastWriteTimeUtc = $then
+        (Get-Item -LiteralPath $file).CreationTimeUtc  = $then
+
+        ytxa $global:YtxaRoot -Upgrade 6>$null | Out-Null
+
+        (Get-Item -LiteralPath $file).LastWriteTimeUtc | Should -Be $then
+        (Get-Item -LiteralPath $file).CreationTimeUtc  | Should -Be $then
+    }
+
+    It 'leaves Upgrade rows to the download, which writes the tag itself' {
+        New-YtxaFile 'low [aaaaaaaaaaa].mp4' -Width 1280 -Height 720 | Out-Null
+        $global:YtxaFormats['aaaaaaaaaaa'] = 1080
+
+        $row = @(ytxa $global:YtxaRoot -Upgrade 6>$null)[0]
+
+        $global:YtxaQvcpCalls.Count   | Should -Be 1
+        $global:YtxaFfmpegCalls.Count | Should -Be 0
+        $row.SourceUrlStatus | Should -Be 'Missing'   # describes the file that was replaced
+    }
+
+    It 'does not touch files that are tagged, mismatched, or unavailable' {
+        New-YtxaFile 'tagged [aaaaaaaaaaa].mp4' -Tags @{ comment = '[[SourceURL|https://www.youtube.com/watch?v=aaaaaaaaaaa]]' } | Out-Null
+        New-YtxaFile 'wrong [bbbbbbbbbbb].mp4' -Tags @{ comment = '[[SourceURL|https://www.youtube.com/watch?v=zzzzzzzzzzz]]' } | Out-Null
+        New-YtxaFile 'gone [ccccccccccc].mp4' | Out-Null
+        $global:YtxaFormats['aaaaaaaaaaa'] = 1080
+        $global:YtxaFormats['bbbbbbbbbbb'] = 1080
+
+        $rows = @(ytxa $global:YtxaRoot -Upgrade 6>$null)
+
+        $global:YtxaFfmpegCalls.Count | Should -Be 0
+        $rows.SourceUrlStatus | Should -Be @('Missing', 'OK', 'Mismatch')
+    }
+
+    It 'does not write a URL when the durations disagree' {
+        $file = New-YtxaFile 'other [aaaaaaaaaaa].mp4' -Duration 100
+        $global:YtxaFormats['aaaaaaaaaaa'] = 1080
+        $global:YtxaDurations['aaaaaaaaaaa'] = 3600
+
+        $row = @(ytxa $global:YtxaRoot -Upgrade 6>$null)[0]
+
+        $global:YtxaFfmpegCalls.Count | Should -Be 0
+        $row.SourceUrlStatus | Should -Be 'Missing'
+        $row.Note            | Should -Match 'runs 100s, YouTube says 3600s'
+        (Get-Item -LiteralPath $file).Length | Should -Be 0
+    }
+
+    It 'tolerates a few seconds of difference' {
+        New-YtxaFile 'close [aaaaaaaaaaa].mp4' -Duration 100.4 | Out-Null
+        $global:YtxaFormats['aaaaaaaaaaa'] = 1080
+        $global:YtxaDurations['aaaaaaaaaaa'] = 103
+
+        @(ytxa $global:YtxaRoot -Upgrade 6>$null)[0].SourceUrlStatus | Should -Be 'Added'
+    }
+
+    It 'does not write a URL when YouTube reports no duration to confirm with' {
+        New-YtxaFile 'live [aaaaaaaaaaa].mp4' | Out-Null
+        $global:YtxaFormats['aaaaaaaaaaa'] = 1080
+        $global:YtxaDurations['aaaaaaaaaaa'] = $null
+
+        $row = @(ytxa $global:YtxaRoot -Upgrade 6>$null)[0]
+
+        $global:YtxaFfmpegCalls.Count | Should -Be 0
+        $row.SourceUrlStatus | Should -Be 'Missing'
+        $row.Note            | Should -Match 'no duration'
+    }
+
+    It 'keeps the original and cleans up when ffmpeg fails' {
+        $file = New-YtxaFile 'best [aaaaaaaaaaa].mp4'
+        $global:YtxaFormats['aaaaaaaaaaa'] = 1080
+        $global:YtxaFfmpegFails = @('aaaaaaaaaaa')
+
+        $row = @(ytxa $global:YtxaRoot -Upgrade -WarningAction SilentlyContinue 6>$null)[0]
+
+        $row.SourceUrlStatus | Should -Be 'Missing'
+        $row.Note            | Should -Match 'ffmpeg failed \(exit code 1\)'
+        $row.Note            | Should -Match 'Error opening output file'
+        (Get-Item -LiteralPath $file).Length | Should -Be 0
+        Get-ChildItem -LiteralPath $global:YtxaRoot -Filter '*.ytxa-new.*' | Should -BeNullOrEmpty
+    }
+
+    It 'keeps the original when the comment did not survive the remux' {
+        $file = New-YtxaFile 'best [aaaaaaaaaaa].mov'
+        $global:YtxaFormats['aaaaaaaaaaa'] = 1080
+        $global:YtxaFfmpegDropsTag = @('aaaaaaaaaaa')
+
+        $row = @(ytxa $global:YtxaRoot -Upgrade -WarningAction SilentlyContinue 6>$null)[0]
+
+        $global:YtxaFfmpegCalls.Count | Should -Be 1
+        $row.SourceUrlStatus | Should -Be 'Missing'
+        $row.Note            | Should -Match 'did not survive'
+        (Get-Item -LiteralPath $file).Length | Should -Be 0
+        Get-ChildItem -LiteralPath $global:YtxaRoot -Filter '*.ytxa-new.*' | Should -BeNullOrEmpty
+    }
+
+    It 'leaves the original in place, not aside, when it cannot be moved' {
+        $file = New-YtxaFile 'locked [aaaaaaaaaaa].mp4'
+        $global:YtxaFormats['aaaaaaaaaaa'] = 1080
+
+        $handle = [System.IO.File]::Open($file, 'Open', 'Read', 'None')   # exclusive: the move aside must fail
+        try {
+            $row = @(ytxa $global:YtxaRoot -Upgrade -WarningAction SilentlyContinue 6>$null)[0]
+        }
+        finally {
+            $handle.Dispose()
+        }
+
+        $global:YtxaFfmpegCalls.Count | Should -Be 1                     # the remux itself ran (the stub does not read its input)
+        $row.SourceUrlStatus | Should -Be 'Missing'
+        $row.Note            | Should -Match 'SourceURL not written'
+        (Get-Item -LiteralPath $file).Length | Should -Be 0
+        Test-Path -LiteralPath "$file.ytxa-old" | Should -BeFalse
+        Get-ChildItem -LiteralPath $global:YtxaRoot -Filter '*.ytxa-new.*' | Should -BeNullOrEmpty
+    }
+
+    It 'keeps the earlier note alongside the reason' -Skip:(-not $global:YtxaHasCookies) {
+        New-YtxaFile 'gated [aaaaaaaaaaa].mp4' | Out-Null
+        $global:YtxaGated = @('aaaaaaaaaaa')
+        $global:YtxaFormats['aaaaaaaaaaa'] = 1080
+        $global:YtxaFfmpegFails = @('aaaaaaaaaaa')
+
+        $row = @(ytxa $global:YtxaRoot -Upgrade -WarningAction SilentlyContinue 6>$null)[0]
+
+        $row.Note | Should -Match 'ffmpeg failed'
+        $row.Note | Should -Match 'before the upgrade: resolved with cookies'
+    }
+
+    It 'continues with the next file after a failure' {
+        New-YtxaFile 'a [aaaaaaaaaaa].mp4' | Out-Null
+        New-YtxaFile 'b [bbbbbbbbbbb].mp4' | Out-Null
+        $global:YtxaFormats['aaaaaaaaaaa'] = 1080
+        $global:YtxaFormats['bbbbbbbbbbb'] = 1080
+        $global:YtxaFfmpegFails = @('aaaaaaaaaaa')
+
+        $rows = @(ytxa $global:YtxaRoot -Upgrade -WarningAction SilentlyContinue 6>$null)
+
+        $rows.SourceUrlStatus | Should -Be @('Missing', 'Added')
+        $global:YtxaFfmpegCalls.Count | Should -Be 2
+    }
+
+    It 'counts the tags it wrote in the summary' {
+        New-YtxaFile 'a [aaaaaaaaaaa].mp4' | Out-Null
+        New-YtxaFile 'b [bbbbbbbbbbb].mp4' | Out-Null
+        $global:YtxaFormats['aaaaaaaaaaa'] = 1080
+        $global:YtxaFormats['bbbbbbbbbbb'] = 1080
+        $global:YtxaDurations['bbbbbbbbbbb'] = 999
+
+        $summary = (ytxa $global:YtxaRoot -Upgrade 6>&1 | Where-Object { $_ -is [System.Management.Automation.InformationRecord] }) -join ' '
+
+        $summary | Should -Match 'MissingSource: 1'
+        $summary | Should -Match 'SourceAdded: 1'
     }
 }

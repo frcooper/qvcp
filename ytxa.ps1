@@ -37,7 +37,8 @@ function ytxa {
     .EXAMPLE
         ytxa D:\clips\2026-07 -Upgrade
         Re-download those files in place, keeping each old one until its
-        replacement has landed.
+        replacement has landed. Files already at the best resolution but
+        without the SourceURL comment get it written in.
     #>
     [CmdletBinding()]
     param(
@@ -74,6 +75,12 @@ function ytxa {
         # (-Y when the cookies file exists, -G otherwise). The old file is
         # moved aside first and deleted only once the new one is confirmed;
         # on failure it is put back. Needs qvcp loaded in the session.
+        #
+        # Files that are already the best resolution but have no SourceURL
+        # comment get one, derived from the filename id, once yt-dlp has
+        # resolved that id and its duration agrees with the file's. The tag
+        # is written by an ffmpeg remux (-c copy) into a temporary sibling,
+        # which replaces the original only after the tag is read back.
         [switch]$Upgrade
     )
 
@@ -103,6 +110,9 @@ function ytxa {
     }
     if ($Upgrade -and -not (Get-Command 'qvcp' -CommandType Function -ErrorAction SilentlyContinue)) {
         throw "-Upgrade downloads through qvcp, which is not loaded; dot-source qvcp.ps1 first"
+    }
+    if ($Upgrade -and -not (Get-Command 'ffmpeg' -ErrorAction SilentlyContinue)) {
+        throw "-Upgrade writes the SourceURL comment with ffmpeg, which is not on PATH"
     }
 
     $ytDlpCookiesPath = $null
@@ -177,6 +187,10 @@ function ytxa {
     $files = @($files | Sort-Object FullName)
 
     $rows = [System.Collections.Generic.List[object]]::new()
+    # What -Upgrade needs to write a SourceURL comment, kept off the rows
+    # because it is an implementation detail: the file's duration (to confirm
+    # the id against yt-dlp's answer) and its existing comment (to keep).
+    $fileMeta = @{}
     $i = 0
     foreach ($file in $files) {
         $i++
@@ -188,7 +202,7 @@ function ytxa {
             Path            = $file.FullName
             Id              = $id
             SourceUrl       = $null
-            SourceUrlStatus = 'Missing'   # Missing | OK | Mismatch
+            SourceUrlStatus = 'Missing'   # Missing | OK | Mismatch | Added (-Upgrade wrote it)
             Res             = $null
             BestRes         = $null
             ResStatus       = 'Skipped'   # Skipped | OK | Upgrade | Unavailable | NoVideo
@@ -202,7 +216,7 @@ function ytxa {
         # -show_entries filters are case-sensitive.
         $probe = $null
         try {
-            $probeText = & ffprobe -v error -show_entries 'format_tags:stream=codec_type,width,height' -of json -i $file.FullName 2>$null
+            $probeText = & ffprobe -v error -show_entries 'format=duration:format_tags:stream=codec_type,width,height' -of json -i $file.FullName 2>$null
             if ($LASTEXITCODE -eq 0 -and $probeText) {
                 $probe = ($probeText -join "`n") | ConvertFrom-Json
             }
@@ -216,10 +230,14 @@ function ytxa {
             continue
         }
 
+        $meta = @{ Duration = ($probe.format.duration -as [double]); Comment = $null }
+        $fileMeta[$file.FullName] = $meta
+
         $tags = $probe.format.tags
         if ($tags) {
             foreach ($prop in $tags.PSObject.Properties) {
                 if ($prop.Name -ine 'comment') { continue }
+                $meta.Comment = [string]$prop.Value
                 $m = [regex]::Match([string]$prop.Value, $SOURCE_SIGIL)
                 if ($m.Success) {
                     $row.SourceUrl = $m.Groups['url'].Value
@@ -261,6 +279,9 @@ function ytxa {
         # by, and the tag is already flagged. Duplicates (the same video in
         # two folders) share one query.
         $byQueryId = @{}
+        # yt-dlp's duration per resolved id, which -Upgrade checks against
+        # the file before writing a SourceURL comment derived from its name.
+        $ytDurationById = @{}
         foreach ($row in $pending) {
             if (-not $byQueryId.ContainsKey($row.Id)) { $byQueryId[$row.Id] = [System.Collections.Generic.List[object]]::new() }
             $byQueryId[$row.Id].Add($row)
@@ -311,6 +332,7 @@ function ytxa {
                     if (-not $text.StartsWith('{')) { continue }
                     try { $info = $text | ConvertFrom-Json } catch { Write-Warning "unparseable yt-dlp output: $($text.Substring(0, [Math]::Min(80, $text.Length)))"; continue }
                     if (-not $info.id -or -not $byQueryId.ContainsKey([string]$info.id)) { continue }
+                    $ytDurationById[[string]$info.id] = $info.duration -as [double]
 
                     $best = $null
                     foreach ($f in @($info.formats)) {
@@ -431,6 +453,113 @@ function ytxa {
             }
         }
         Write-Progress -Activity 'Upgrading' -Completed
+
+        # ---- Write the SourceURL comment into current, untagged files -------
+
+        # Upgrade rows get the comment from the fresh download; a file that
+        # is already the best resolution would otherwise stay untagged for
+        # good. The URL is derived from the filename id, so before it is made
+        # permanent the id has to have resolved (ResStatus OK says it did)
+        # and yt-dlp's duration has to agree with the file's: an id that
+        # merely occurs in a title would fail that. Mismatch rows are left
+        # for a person to sort out.
+        $DURATION_TOLERANCE = 5   # seconds; yt-dlp reports whole seconds
+        $TAG_SUFFIX         = '.ytxa-new'
+
+        $todo = @($rows | Where-Object { $_.SourceUrlStatus -eq 'Missing' -and $_.ResStatus -eq 'OK' })
+        $i = 0
+        foreach ($row in $todo) {
+            $i++
+            Write-Progress -Activity 'Writing SourceURL' -Status ([System.IO.Path]::GetFileName($row.Path)) -PercentComplete (100 * ($i - 1) / $todo.Count)
+
+            $fileDuration = $fileMeta[$row.Path].Duration
+            $ytDuration   = $ytDurationById[$row.Id]
+            if (-not $fileDuration -or -not $ytDuration) {
+                Add-UpgradeNote $row 'SourceURL not written: no duration to confirm the id with'
+                continue
+            }
+            if ([Math]::Abs($fileDuration - $ytDuration) -gt $DURATION_TOLERANCE) {
+                Add-UpgradeNote $row ('SourceURL not written: the file runs {0:0}s, YouTube says {1:0}s' -f $fileDuration, $ytDuration)
+                continue
+            }
+
+            $url   = "https://www.youtube.com/watch?v=$($row.Id)"
+            $sigil = "[[SourceURL|$url]]"
+            # Same shape as qvcp's download: the sigil leads. Anything the
+            # comment already held stays behind it.
+            $existing = $fileMeta[$row.Path].Comment
+            $comment  = if ([string]::IsNullOrWhiteSpace($existing)) { $sigil } else { "$sigil`n$existing" }
+
+            # ffmpeg cannot edit tags in place, so the file is remuxed (-c
+            # copy, every stream) into a sibling whose name no longer ends in
+            # "[id]", and that replaces the original only once the comment
+            # has been read back out of it. Timestamps are carried over so a
+            # metadata fix does not make the file look freshly written. The
+            # swap follows the upgrade's pattern rather than an overwriting
+            # move (which deletes first, then moves): the original goes
+            # aside, the new file takes its name, and only then is the old
+            # one removed, so a failure at any step still leaves a copy.
+            $tmp = Join-Path ([System.IO.Path]::GetDirectoryName($row.Path)) `
+                ([System.IO.Path]::GetFileNameWithoutExtension($row.Path) + $TAG_SUFFIX + [System.IO.Path]::GetExtension($row.Path))
+            $aside      = $row.Path + $ASIDE_SUFFIX
+            $movedAside = $false
+            try {
+                $ffmpegArgs = @('-v', 'error', '-nostdin', '-y', '-i', $row.Path, '-map', '0', '-c', 'copy', '-metadata', "comment=$comment", $tmp)
+                Write-Verbose ("ffmpeg " + ($ffmpegArgs -join ' '))
+                $output = @(& ffmpeg @ffmpegArgs 2>&1 | ForEach-Object { "$_" })
+                if ($LASTEXITCODE -ne 0) {
+                    throw "ffmpeg failed (exit code $LASTEXITCODE): $($output -join ' ')"
+                }
+
+                $written = $null
+                $checkText = & ffprobe -v error -show_entries 'format_tags' -of json -i $tmp 2>$null
+                if ($LASTEXITCODE -eq 0 -and $checkText) {
+                    $check = ($checkText -join "`n") | ConvertFrom-Json
+                    foreach ($prop in @($check.format.tags.PSObject.Properties)) {
+                        if ($prop.Name -ieq 'comment') { $written = [string]$prop.Value }
+                    }
+                }
+                if (-not $written -or -not [regex]::Match($written, $SOURCE_SIGIL).Success) {
+                    throw "the comment did not survive the remux"
+                }
+
+                $orig = Get-Item -LiteralPath $row.Path
+                $new  = Get-Item -LiteralPath $tmp
+                $new.CreationTimeUtc  = $orig.CreationTimeUtc
+                $new.LastWriteTimeUtc = $orig.LastWriteTimeUtc
+
+                Move-Item -LiteralPath $row.Path -Destination $aside -Force -ErrorAction Stop
+                $movedAside = $true
+                # No -Force: the original name was just vacated, and anything
+                # that has appeared there since is not ours to overwrite.
+                Move-Item -LiteralPath $tmp -Destination $row.Path -ErrorAction Stop
+            }
+            catch {
+                Add-UpgradeNote $row "SourceURL not written: $_"
+                Write-Warning "SourceURL not written to '$($row.Path)': $_"
+                Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+                if ($movedAside) {
+                    try {
+                        Move-Item -LiteralPath $aside -Destination $row.Path -ErrorAction Stop
+                    }
+                    catch {
+                        Write-Warning "Could not restore '$($row.Path)' from '$aside': $_"
+                    }
+                }
+                continue
+            }
+
+            $row.SourceUrl       = $url
+            $row.SourceUrlStatus = 'Added'
+            try {
+                Remove-Item -LiteralPath $aside -Force -ErrorAction Stop
+            }
+            catch {
+                Add-UpgradeNote $row "old file could not be removed, still at '$aside': $_"
+                Write-Warning "old file could not be removed, still at '$aside': $_"
+            }
+        }
+        Write-Progress -Activity 'Writing SourceURL' -Completed
     }
 
     # ---- Summary -----------------------------------------------------------
@@ -447,6 +576,7 @@ function ytxa {
     if ($Upgrade) {
         $summary.Upgraded      = @($rows | Where-Object UpgradeStatus -eq 'Upgraded').Count
         $summary.UpgradeFailed = @($rows | Where-Object UpgradeStatus -eq 'Failed').Count
+        $summary.SourceAdded   = @($rows | Where-Object SourceUrlStatus -eq 'Added').Count
     }
     # Write-Host lands on the information stream (PS 5+), so 6>$null silences
     # the summary and the pipeline carries only the rows.
