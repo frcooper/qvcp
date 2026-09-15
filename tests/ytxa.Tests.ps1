@@ -768,6 +768,7 @@ Describe 'ytxa -Upgrade SourceURL tagging' {
         $row.Note            | Should -BeNullOrEmpty
         Get-Content -LiteralPath $file -Raw | Should -Be 'tagged'         # the remuxed file replaced the original
         Test-Path -LiteralPath $call[-1] | Should -BeFalse                # and the temporary name is gone
+        Test-Path -LiteralPath "$file.ytxa-old" | Should -BeFalse         # as is the moved-aside original
     }
 
     It 'reads the comment back from the temporary file before replacing the original' {
@@ -884,6 +885,26 @@ Describe 'ytxa -Upgrade SourceURL tagging' {
         $row.SourceUrlStatus | Should -Be 'Missing'
         $row.Note            | Should -Match 'did not survive'
         (Get-Item -LiteralPath $file).Length | Should -Be 0
+        Get-ChildItem -LiteralPath $global:YtxaRoot -Filter '*.ytxa-new.*' | Should -BeNullOrEmpty
+    }
+
+    It 'leaves the original in place, not aside, when it cannot be moved' {
+        $file = New-YtxaFile 'locked [aaaaaaaaaaa].mp4'
+        $global:YtxaFormats['aaaaaaaaaaa'] = 1080
+
+        $handle = [System.IO.File]::Open($file, 'Open', 'Read', 'None')   # exclusive: the move aside must fail
+        try {
+            $row = @(ytxa $global:YtxaRoot -Upgrade -WarningAction SilentlyContinue 6>$null)[0]
+        }
+        finally {
+            $handle.Dispose()
+        }
+
+        $global:YtxaFfmpegCalls.Count | Should -Be 1                     # the remux itself ran (the stub does not read its input)
+        $row.SourceUrlStatus | Should -Be 'Missing'
+        $row.Note            | Should -Match 'SourceURL not written'
+        (Get-Item -LiteralPath $file).Length | Should -Be 0
+        Test-Path -LiteralPath "$file.ytxa-old" | Should -BeFalse
         Get-ChildItem -LiteralPath $global:YtxaRoot -Filter '*.ytxa-new.*' | Should -BeNullOrEmpty
     }
 

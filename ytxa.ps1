@@ -494,9 +494,15 @@ function ytxa {
             # copy, every stream) into a sibling whose name no longer ends in
             # "[id]", and that replaces the original only once the comment
             # has been read back out of it. Timestamps are carried over so a
-            # metadata fix does not make the file look freshly written.
+            # metadata fix does not make the file look freshly written. The
+            # swap follows the upgrade's pattern rather than an overwriting
+            # move (which deletes first, then moves): the original goes
+            # aside, the new file takes its name, and only then is the old
+            # one removed, so a failure at any step still leaves a copy.
             $tmp = Join-Path ([System.IO.Path]::GetDirectoryName($row.Path)) `
                 ([System.IO.Path]::GetFileNameWithoutExtension($row.Path) + $TAG_SUFFIX + [System.IO.Path]::GetExtension($row.Path))
+            $aside      = $row.Path + $ASIDE_SUFFIX
+            $movedAside = $false
             try {
                 $ffmpegArgs = @('-v', 'error', '-nostdin', '-y', '-i', $row.Path, '-map', '0', '-c', 'copy', '-metadata', "comment=$comment", $tmp)
                 Write-Verbose ("ffmpeg " + ($ffmpegArgs -join ' '))
@@ -521,17 +527,37 @@ function ytxa {
                 $new  = Get-Item -LiteralPath $tmp
                 $new.CreationTimeUtc  = $orig.CreationTimeUtc
                 $new.LastWriteTimeUtc = $orig.LastWriteTimeUtc
-                Move-Item -LiteralPath $tmp -Destination $row.Path -Force -ErrorAction Stop
+
+                Move-Item -LiteralPath $row.Path -Destination $aside -Force -ErrorAction Stop
+                $movedAside = $true
+                # No -Force: the original name was just vacated, and anything
+                # that has appeared there since is not ours to overwrite.
+                Move-Item -LiteralPath $tmp -Destination $row.Path -ErrorAction Stop
             }
             catch {
                 Add-UpgradeNote $row "SourceURL not written: $_"
                 Write-Warning "SourceURL not written to '$($row.Path)': $_"
                 Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+                if ($movedAside) {
+                    try {
+                        Move-Item -LiteralPath $aside -Destination $row.Path -ErrorAction Stop
+                    }
+                    catch {
+                        Write-Warning "Could not restore '$($row.Path)' from '$aside': $_"
+                    }
+                }
                 continue
             }
 
             $row.SourceUrl       = $url
             $row.SourceUrlStatus = 'Added'
+            try {
+                Remove-Item -LiteralPath $aside -Force -ErrorAction Stop
+            }
+            catch {
+                Add-UpgradeNote $row "old file could not be removed, still at '$aside': $_"
+                Write-Warning "old file could not be removed, still at '$aside': $_"
+            }
         }
         Write-Progress -Activity 'Writing SourceURL' -Completed
     }
