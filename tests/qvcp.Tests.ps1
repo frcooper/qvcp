@@ -66,12 +66,31 @@ BeforeAll {
         $global:LASTEXITCODE = Get-QvcpStubExitCode
     }
 
+    # Answers the already-downloaded check from a table of comments keyed by
+    # leaf name. Its calls are kept apart from QvcpTestCalls, which the tests
+    # count as yt-dlp / ffmpeg invocations.
+    function global:ffprobe {
+        $global:QvcpTestProbeCalls += , ([string[]]$args)
+        $i    = [Array]::IndexOf([string[]]$args, '-i')
+        $leaf = [System.IO.Path]::GetFileName($args[$i + 1])
+        $tags = @{}
+        if ($global:QvcpTestProbeComments.ContainsKey($leaf)) { $tags.comment = $global:QvcpTestProbeComments[$leaf] }
+        @{ format = @{ tags = $tags } } | ConvertTo-Json -Depth 5
+        $global:LASTEXITCODE = 0
+    }
+
     # Pester does not allow BeforeEach at the container root, so each Describe
     # calls this instead.
     function global:Reset-QvcpTestState {
-        $global:QvcpTestCalls    = @()
-        $global:QvcpTestTitles   = @()
-        $global:QvcpTestExitCode = 0
+        $global:QvcpTestCalls         = @()
+        $global:QvcpTestTitles        = @()
+        $global:QvcpTestExitCode      = 0
+        $global:QvcpTestProbeCalls    = @()
+        $global:QvcpTestProbeComments = @{}
+        $month = Get-QvcpMonthFolder
+        if (Test-Path -LiteralPath $month) {
+            Get-ChildItem -LiteralPath $month -File | Remove-Item -Force
+        }
     }
 
     function global:Get-QvcpArgAfter {
@@ -85,6 +104,7 @@ BeforeAll {
 AfterAll {
     Remove-Item -Path 'function:yt-dlp'          -ErrorAction SilentlyContinue
     Remove-Item -Path 'function:ffmpeg'          -ErrorAction SilentlyContinue
+    Remove-Item -Path 'function:ffprobe'         -ErrorAction SilentlyContinue
     Remove-Item -Path 'function:Get-QvcpStubExitCode' -ErrorAction SilentlyContinue
     Remove-Item -Path 'function:Get-QvcpArgAfter' -ErrorAction SilentlyContinue
     Remove-Item -Path 'function:Reset-QvcpTestState' -ErrorAction SilentlyContinue
@@ -97,6 +117,7 @@ AfterAll {
     }
 
     Remove-Variable -Name QvcpTestCalls, QvcpTestTitles, QvcpTestExitCode, QvcpTestRoot,
+        QvcpTestProbeCalls, QvcpTestProbeComments,
         QvcpTestCookiesPath, QvcpTestOriginalOutputRoot,
         QvcpTestHasCookies, QvcpTestCanSetTitle -Scope Global -ErrorAction SilentlyContinue
 }
@@ -221,6 +242,87 @@ Describe 'qvcp -G (generic yt-dlp mode)' {
 
         { qvcp -G 'https://example.com/a.mp4' -WarningAction SilentlyContinue } |
             Should -Throw -ExpectedMessage "*Skipping fragment*already downloaded*"
+    }
+}
+
+Describe 'qvcp re-run over an existing download' {
+    BeforeEach {
+        Reset-QvcpTestState
+        $month = Get-QvcpMonthFolder
+        New-Item -ItemType Directory -Path $month -Force | Out-Null
+        function New-Download([string]$Name, [string]$Comment) {
+            New-Item -ItemType File -Path (Join-Path $month $Name) -Force | Out-Null
+            if ($Comment) { $global:QvcpTestProbeComments[$Name] = $Comment }
+        }
+    }
+
+    It 'skips yt-dlp when the file is already tagged for that id' {
+        New-Download 'Clip [dQw4w9WgXcQ].mp4' "[[SourceURL|https://www.youtube.com/watch?v=dQw4w9WgXcQ]]"
+
+        qvcp -G 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' 6>$null
+
+        $global:QvcpTestCalls.Count | Should -Be 0
+        $global:QvcpTestProbeCalls.Count | Should -Be 1
+    }
+
+    It 'recognises short links and keeps an older comment behind the sigil' {
+        New-Download 'Clip [dQw4w9WgXcQ].webm' "[[SourceURL|https://www.youtube.com/watch?v=dQw4w9WgXcQ]]`nold note"
+
+        qvcp -G 'https://youtu.be/dQw4w9WgXcQ' 6>$null
+
+        $global:QvcpTestCalls.Count | Should -Be 0
+    }
+
+    It 'runs yt-dlp when the existing file has no SourceURL comment' {
+        New-Download 'Clip [dQw4w9WgXcQ].mp4' 'just a comment'
+
+        qvcp -G 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' 6>$null
+
+        $global:QvcpTestCalls.Count | Should -Be 1
+    }
+
+    It 'runs yt-dlp when the sigil names a different video' {
+        New-Download 'Clip [dQw4w9WgXcQ].mp4' "[[SourceURL|https://www.youtube.com/watch?v=aaaaaaaaaaa]]"
+
+        qvcp -G 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' 6>$null
+
+        $global:QvcpTestCalls.Count | Should -Be 1
+    }
+
+    It 'runs yt-dlp when any copy of the video is untagged' {
+        New-Download 'Clip [dQw4w9WgXcQ].mp4'  "[[SourceURL|https://www.youtube.com/watch?v=dQw4w9WgXcQ]]"
+        New-Download 'Clip [dQw4w9WgXcQ].webm' $null
+
+        qvcp -G 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' 6>$null
+
+        $global:QvcpTestCalls.Count | Should -Be 1
+    }
+
+    It 'ignores a file ytxa has moved aside' {
+        New-Download 'Clip [dQw4w9WgXcQ].mp4.ytxa-old' "[[SourceURL|https://www.youtube.com/watch?v=dQw4w9WgXcQ]]"
+
+        qvcp -G 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' 6>$null
+
+        $global:QvcpTestCalls.Count | Should -Be 1
+        $global:QvcpTestProbeCalls.Count | Should -Be 0
+    }
+
+    It 'does not derive an id from a non-YouTube URL' {
+        New-Download 'Clip [dQw4w9WgXcQ].mp4' "[[SourceURL|https://www.youtube.com/watch?v=dQw4w9WgXcQ]]"
+
+        qvcp -G 'https://example.com/watch?v=dQw4w9WgXcQ' 6>$null
+
+        $global:QvcpTestCalls.Count | Should -Be 1
+        $global:QvcpTestProbeCalls.Count | Should -Be 0
+    }
+
+    It 'skips only the tagged URLs in a batch' {
+        New-Download 'Clip [dQw4w9WgXcQ].mp4' "[[SourceURL|https://www.youtube.com/watch?v=dQw4w9WgXcQ]]"
+
+        qvcp -G 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' 'https://www.youtube.com/watch?v=bbbbbbbbbbb' 6>$null
+
+        $global:QvcpTestCalls.Count | Should -Be 1
+        $global:QvcpTestCalls[0][-1] | Should -Be 'https://www.youtube.com/watch?v=bbbbbbbbbbb'
     }
 }
 
