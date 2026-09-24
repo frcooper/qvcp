@@ -29,7 +29,7 @@ For playback, VLC can open the same URL.
 
 ## PowerShell helper (`qvcp.ps1`)
 
-`qvcp.ps1` wraps ffmpeg so you can archive the copied stream URL with one command. Add it to your PowerShell profile so the `qvcp` function is always available (e.g., `if (Test-Path 'C:\tools\qvcp\qvcp.ps1') { . 'C:\tools\qvcp\qvcp.ps1' }`). It takes the clip label and the URL:
+`qvcp.ps1` wraps ffmpeg so you can archive the copied stream URL with one command. Add it to your PowerShell profile so the `qvcp` function is always available (e.g., `if (Test-Path 'C:\tools\qvcp\qvcp.ps1') { . 'C:\tools\qvcp\qvcp.ps1' }`). Keep `QvcpCommon.psm1` in the same folder: `qvcp.ps1` and `ytxa.ps1` both import it for the settings and parsing rules they share. It takes the clip label and the URL:
 
 ```pwsh
 qvcp "Show • Episode 12" "https://example.com/path/to/master.m3u8?token=..."
@@ -72,6 +72,8 @@ TAG:comment=[[SourceURL|https://www.youtube.com/watch?v=SDD-DqtfQ1k]]
 The URL is the per-video `webpage_url`, so playlist entries each get their own. A dedicated `source` tag is also requested; **mkv/webm keep it, mp4 silently drops it**, because mp4 has no slot for arbitrary keys. That is why the sigil in `comment` is the primary mechanism — `comment` is the one field every container and player supports.
 
 The sigil is built to be trivially parseable: `|` cannot appear unencoded in a URL (RFC 3986), so a plain split works and no regex is required. It also contains no colon, which is why the `--parse-metadata` rule needs no escaping. Extract it with `[[SourceURL\|(.*?)]]`.
+
+yt-dlp re-embeds metadata even into a file it reports as "already downloaded", which means a remux of the whole file (and a failure if a player still has it open). To avoid that, qvcp checks YouTube URLs first: if the output folder already holds the video (matched by its `[<id>]` suffix) and its comment already carries the sigil for that id, yt-dlp is not run for that URL and qvcp prints `Already downloaded and tagged, skipping`. An untagged or mismatched file still goes through yt-dlp so the tag gets written. The check needs `ffprobe` on `PATH`; without it, every URL goes to yt-dlp as before.
 
 > **Do not add `-movflags use_metadata_tags` to rescue the `source` tag on mp4.** It does not add a key alongside the standard atoms — it switches the mov muxer to the `mdta`/`keys` mechanism for *every* tag, so `©nam` and `©cmt` disappear. `ffprobe` still reads the file fine, which makes this look like it works, but VLC, Windows Media Player, and Explorer show no metadata at all.
 

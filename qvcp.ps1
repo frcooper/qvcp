@@ -1,3 +1,7 @@
+# Output root, cookies path, id matching and the SourceURL sigil are shared
+# with ytxa.ps1 through this module, which has to sit next to this file.
+Import-Module (Join-Path $PSScriptRoot 'QvcpCommon.psm1') -Force
+
 function qvcp {
     [CmdletBinding(DefaultParameterSetName='FFmpeg')]
     param(
@@ -21,17 +25,15 @@ function qvcp {
         [string]$OutDir
     )
 
-    $YTDLP_COOKIES_FILE = 'cookies.firefox-private.txt'
     # FROM:TO for yt-dlp --parse-metadata, split on the first unescaped colon.
     # The sigil deliberately contains no colon, so nothing here needs escaping,
     # and '|' cannot appear unencoded in a URL, so splitting on it is safe.
-    $YTDLP_COMMENT_RULE = '[[SourceURL|%(webpage_url)s]]:%(meta_comment)s'
+    $YTDLP_COMMENT_RULE = (Format-QvcpSourceSigil '%(webpage_url)s') + ':%(meta_comment)s'
     # mp4 silently drops non-standard keys such as 'source'; mkv/webm keep them.
     # Do NOT try to rescue this with -movflags use_metadata_tags: that switches
     # the mov muxer to the mdta/keys mechanism for *all* tags, so the standard
     # atoms (title, comment) disappear and players show nothing at all.
     $YTDLP_SOURCE_RULE  = '%(webpage_url)s:%(meta_source)s'
-    $QVCP_OUTPUT_ROOT   = if ([string]::IsNullOrWhiteSpace($env:QVCP_OUTPUT_ROOT)) { 'X:\in\clips' } else { $env:QVCP_OUTPUT_ROOT }
 
     $originalTitle = $Host.UI.RawUI.WindowTitle
 
@@ -41,7 +43,7 @@ function qvcp {
         }
 
         $folder = if ([string]::IsNullOrWhiteSpace($OutDir)) {
-            Join-Path $QVCP_OUTPUT_ROOT ('{0:yyyy-MM}' -f (Get-Date))
+            Join-Path (Get-QvcpOutputRoot) ('{0:yyyy-MM}' -f (Get-Date))
         }
         else {
             $OutDir
@@ -61,17 +63,6 @@ function qvcp {
                 throw "yt-dlp not found on PATH"
             }
 
-            $youtubeHosts = @(
-                'youtube.com',
-                'www.youtube.com',
-                'm.youtube.com',
-                'music.youtube.com',
-                'youtu.be',
-                'www.youtu.be',
-                'youtube-nocookie.com',
-                'www.youtube-nocookie.com'
-            )
-
             $ytDlpCookiesPath = $null
 
             if ($Y) {
@@ -81,20 +72,47 @@ function qvcp {
                         continue
                     }
 
-                    $uri = $null
-                    if ([Uri]::TryCreate($u, [UriKind]::Absolute, [ref]$uri) -and $youtubeHosts -contains $uri.Host.ToLowerInvariant()) {
+                    if (Test-QvcpYouTubeUrl $u) {
                         $hasYouTubeUrl = $true
                         break
                     }
                 }
 
                 if ($hasYouTubeUrl) {
-                    $documentsPath = [Environment]::GetFolderPath('MyDocuments')
-                    $ytDlpCookiesPath = Join-Path $documentsPath $YTDLP_COOKIES_FILE
+                    $ytDlpCookiesPath = Get-QvcpCookiesPath
                     if (-not (Test-Path -LiteralPath $ytDlpCookiesPath -PathType Leaf)) {
                         throw "Cookies file not found: '$ytDlpCookiesPath'"
                     }
                 }
+            }
+
+            # A re-run over files already on disk is not free: yt-dlp reports
+            # 'has already been downloaded' and then runs its post-processors
+            # anyway, so --embed-metadata remuxes every file again (and fails
+            # on one a player still holds open). For a YouTube URL the file can
+            # be found by its '[id]' suffix, the same way ytxa matches it, and
+            # when its comment already carries the SourceURL sigil for that id
+            # there is nothing left to write, so yt-dlp is not run at all.
+            # Anything short of that (no id, no file, no ffprobe, an untagged
+            # or mismatched comment) falls through to yt-dlp as before.
+            $canProbe = [bool](Get-Command 'ffprobe' -ErrorAction SilentlyContinue)
+
+            function Get-QvcpTaggedFile([string]$TargetUrl) {
+                if (-not $canProbe -or -not (Test-QvcpYouTubeUrl $TargetUrl)) { return $null }
+                $id = Get-QvcpUrlId $TargetUrl
+                if (-not $id) { return $null }
+
+                $existing = Find-QvcpDownload $folder $id
+                if ($existing.Count -eq 0) { return $null }
+
+                # Every copy has to be tagged: an untagged one may be the file
+                # yt-dlp would post-process, and that one does need the write.
+                foreach ($file in $existing) {
+                    if (-not (Test-QvcpSourceComment (Read-QvcpComment $file.FullName) $id)) {
+                        return $null
+                    }
+                }
+                return $existing[0].FullName
             }
 
             # One bad URL must not abandon the rest of the batch: yt-dlp exits 1
@@ -107,16 +125,19 @@ function qvcp {
                     continue
                 }
 
+                $tagged = Get-QvcpTaggedFile $u
+                if ($tagged) {
+                    Write-Host "Already downloaded and tagged, skipping: $tagged"
+                    continue
+                }
+
                 $ytDlpArgs = @()
 
                 if ($G) {
                     $ytDlpArgs += @('--ignore-config', '--no-cookies', '--no-cookies-from-browser')
                 }
                 else {
-                    $uri = $null
-                    $isYouTube = [Uri]::TryCreate($u, [UriKind]::Absolute, [ref]$uri) -and $youtubeHosts -contains $uri.Host.ToLowerInvariant()
-
-                    if ($isYouTube) {
+                    if (Test-QvcpYouTubeUrl $u) {
                         $ytDlpArgs += @('--ignore-config', '--cookies', $ytDlpCookiesPath)
                     }
                 }

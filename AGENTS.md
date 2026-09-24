@@ -12,6 +12,7 @@ This repo is a small, copy/paste–driven toolkit:
 - [brave-video-stream-capture.scriptlet.js](brave-video-stream-capture.scriptlet.js): Brave scriptlet variant (no GM_* APIs; clipboard fallbacks).
 - [brave-scriptlet.md](brave-scriptlet.md): Brave installation / enablement steps.
 - [qvcp.ps1](qvcp.ps1): PowerShell `qvcp` function wrapper around `ffmpeg`.
+- [QvcpCommon.psm1](QvcpCommon.psm1): module shared by `qvcp.ps1` and `ytxa.ps1` — output root, cookies path, YouTube host/id matching, video extensions, and the `[[SourceURL|...]]` sigil.
 - [ytxa.ps1](ytxa.ps1): PowerShell `ytxa` function that checks a tree of downloads for the SourceURL tag and for newer, higher-resolution versions on YouTube.
 - [ytup.ps1](ytup.ps1): PowerShell `ytup` function that updates yt-dlp (winget) and the bgutil PO token provider (git checkout + plugin zip) together.
 
@@ -38,7 +39,7 @@ This repo is a small, copy/paste–driven toolkit:
 - [qvcp.ps1](qvcp.ps1) defines a function (not a script entrypoint). Typical usage is to load it from your PowerShell profile so `qvcp` is available in every session. Example profile snippet:
   - `if (Test-Path 'C:\tools\qvcp\qvcp.ps1') { . 'C:\tools\qvcp\qvcp.ps1' }`
 - **ffmpeg mode** (default): `qvcp "Label" "https://...m3u8"`
-- **YouTube / yt-dlp mode** (`-Y` flag): `qvcp -Y "https://www.youtube.com/watch?v=..."` — yt-dlp must be on `PATH`. Supports multiple URLs: `qvcp -Y "url1" "url2" "url3"` (downloaded sequentially). Cookies (`--cookies`) are attached only to URLs whose host is in `$youtubeHosts`.
+- **YouTube / yt-dlp mode** (`-Y` flag): `qvcp -Y "https://www.youtube.com/watch?v=..."` — yt-dlp must be on `PATH`. Supports multiple URLs: `qvcp -Y "url1" "url2" "url3"` (downloaded sequentially). Cookies (`--cookies`) are attached only to YouTube URLs (`Test-QvcpYouTubeUrl`, host list in the shared module).
 - A non-zero yt-dlp exit does **not** abort the batch: the loop warns, records the URL and exit code, and one `throw` at the end lists every failure. yt-dlp exits 1 for a skipped fragment even though the file was written, so aborting on the first one forced a full re-run of the list. The hints in that message are scoped per symptom; keep it that way rather than asserting a single cause.
 - Signed-in YouTube (cookies) can land on the `tv downgraded` client with only m3u8 formats ≤1080p (SABR restriction), while `-G` (no cookies) gets the full DASH ladder. The `-Y` failure hint points at `-G` for public videos; do not "fix" this by forcing a player client in the script.
 - **Generic / yt-dlp mode** (`-G` flag, alias `-Generic`): same download path, but never sends cookies — runs yt-dlp with `--ignore-config --no-cookies --no-cookies-from-browser`. The cookies file is never resolved or validated in this mode. `-Y` and `-G` live in separate parameter sets, so PowerShell rejects both at once; do not add a manual guard.
@@ -50,10 +51,12 @@ This repo is a small, copy/paste–driven toolkit:
 - **Never pass `-movflags use_metadata_tags`.** It looks like the fix for mp4 dropping the non-standard `source` key, and `ffprobe` confirms the key is there — but it switches the mov muxer to the `mdta`/`keys` mechanism for every tag, so the standard `©nam`/`©cmt` atoms are never written and real players (VLC, WMP, Explorer) show nothing. There is a regression guard for this in the test suite; verify metadata changes by inspecting atoms, not with `ffprobe` alone.
 - The `source` tag therefore survives only in mkv/webm. `comment` is the portable carrier, which is what the `[[SourceURL|...]]` sigil is for. It avoids ':' so the `--parse-metadata` rule needs no escaping, avoids '<>' so it survives being rendered as HTML, and uses '|' because that cannot appear unencoded in a URL.
 - ffmpeg mode still writes the bare URL as `comment`, not the `[[SourceURL|...]]` form.
+- yt-dlp runs its post-processors even on a file it reports as "already downloaded", so a re-run would remux every file just to re-embed metadata. Before each YouTube URL in `-Y` / `-G` mode, `qvcp` looks in the output folder for video files ending in `[<id>]`, and skips yt-dlp when every one of them already has a `[[SourceURL|...]]` comment naming that id (checked with `ffprobe`). Anything else — a non-YouTube URL, no match, no `ffprobe`, an untagged or mismatched copy — goes to yt-dlp as before. The matching is `Find-QvcpDownload` / `Test-QvcpSourceComment` from the shared module, so it agrees with ytxa's by construction.
 
 ## ytxa helper notes
 
-- [ytxa.ps1](ytxa.ps1) is a separate dot-sourced function, not a mode of `qvcp`. It duplicates the cookies-file name and output-root default from `qvcp.ps1` on purpose (there is no shared module); keep the two in sync by hand.
+- [ytxa.ps1](ytxa.ps1) is a separate dot-sourced function, not a mode of `qvcp`.
+
 - `-Path` takes folders, files, and filespecs, several at once. Literal lookups (`Test-Path -LiteralPath`) run before the wildcard branch because `[` in a real file name is also a wildcard character; a filespec is matched recursively via `Get-ChildItem -Path <spec> -Recurse`, where a leaf wildcard acts as `-Include` at every level. The extension filter applies to folder scans and filespecs, not to a file named outright.
 - Files are matched only by yt-dlp's bracketed `[<id>]` suffix. Do not loosen this to a bare 11-character match; titles contain such runs by chance.
 - Resolution is compared as `min(width, height)` on both sides, which is how yt-dlp's `res` sort key works, so portrait video is not misreported.
@@ -64,6 +67,13 @@ This repo is a small, copy/paste–driven toolkit:
 - `ffprobe` is called with `-i <file>`, which its own `-h` lists and which keeps a name starting with `-` from being read as an option. Do not "fix" it to a bare positional argument.
 - [tests/ytxa.Tests.ps1](tests/ytxa.Tests.ps1) builds an empty placeholder tree in a temp folder and answers `ffprobe` from a per-file table keyed by leaf name (tags, dimensions, duration); `yt-dlp` answers from a per-id table of resolutions, reporting duration 100 unless `$YtxaDurations` overrides it. The `ffmpeg` stub writes its output file and registers it in the probe table with the comment it was given, so the read-back check sees it; `$YtxaFfmpegFails` / `$YtxaFfmpegDropsTag` drive the failure paths. The "ffmpeg not on PATH" test empties `$env:PATH` because a real ffmpeg may be installed alongside the stub.
 
+## Shared module notes
+
+- Anything `qvcp.ps1` and `ytxa.ps1` must agree on lives in [QvcpCommon.psm1](QvcpCommon.psm1): the output-root default, the cookies-file path, the YouTube host list, the `[<id>]` name and URL id patterns, the video extensions, and the sigil (`Format-QvcpSourceSigil` builds it — qvcp passes it yt-dlp's `%(webpage_url)s` template — and `Get-QvcpSourceUrl` / `Test-QvcpSourceComment` parse it). Add to the module rather than re-declaring a constant in either script.
+- Both scripts run `Import-Module (Join-Path $PSScriptRoot 'QvcpCommon.psm1') -Force` at dot-source time, so the module must sit next to them; `-Force` makes a re-dot-source pick up edits. It is a module rather than a dot-sourced `.ps1` so its constants stay in module scope instead of landing in the user's session; only the `*-Qvcp*` functions are exported, all with approved verbs.
+- Module functions resolve `ffprobe` the same way the scripts do, so the suites' global stub functions still intercept it. `Read-QvcpComment` keeps `-i <file>` as the last two arguments, which the ytxa stub relies on.
+- Id comparison is case-sensitive (`-ceq`): YouTube ids are.
+
 ## ytup helper notes
 
 - [ytup.ps1](ytup.ps1) runs three independent steps through a local `Step` helper that catches, warns, and records; the function throws once at the end. `Step` bodies run in a child scope, so they cannot assign to `ytup`'s variables — anything to hand back is *output* (see the release lookup), and the `$versions` hashtable is mutated by reference.
@@ -73,7 +83,8 @@ This repo is a small, copy/paste–driven toolkit:
 
 ## Tests
 
-- [tests/qvcp.Tests.ps1](tests/qvcp.Tests.ps1), [tests/ytxa.Tests.ps1](tests/ytxa.Tests.ps1) and [tests/ytup.Tests.ps1](tests/ytup.Tests.ps1) are Pester 5+ suites covering the PowerShell helpers; run them with [tests/run-tests.ps1](tests/run-tests.ps1). CI: [.github/workflows/tests.yml](.github/workflows/tests.yml).
+- [tests/QvcpCommon.Tests.ps1](tests/QvcpCommon.Tests.ps1) unit-tests the shared module's parsing rules and file lookup. [tests/qvcp.Tests.ps1](tests/qvcp.Tests.ps1), [tests/ytxa.Tests.ps1](tests/ytxa.Tests.ps1) and [tests/ytup.Tests.ps1](tests/ytup.Tests.ps1) are Pester 5+ suites covering the PowerShell helpers; run them with [tests/run-tests.ps1](tests/run-tests.ps1). CI: [.github/workflows/tests.yml](.github/workflows/tests.yml).
+- The qvcp suite's `ffprobe` stub answers from `$QvcpTestProbeComments` (keyed by leaf name) and records into `$QvcpTestProbeCalls`, apart from `$QvcpTestCalls`, so yt-dlp call counts stay meaningful. `Reset-QvcpTestState` empties the month folder.
 - The suites shadow `yt-dlp` / `ffmpeg` / `ffprobe` / `winget` / `git` / `deno` with global stub **functions** (PowerShell resolves functions before applications) and assert on the recorded argument arrays — nothing is downloaded. Each file defines and removes its own stubs in `BeforeAll` / `AfterAll`, since the files run one after the other in the same session.
 - Stubs also record `$Host.UI.RawUI.WindowTitle` at call time, which is the only point where the title is observable from outside.
 - `-Skip:` is evaluated during Pester discovery, so anything a skip condition depends on must be probed in `BeforeDiscovery`, not `BeforeAll`. Pester rejects a `BeforeEach` at the container root; each `Describe` calls `Reset-QvcpTestState` instead.
