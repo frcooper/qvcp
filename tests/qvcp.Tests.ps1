@@ -178,7 +178,7 @@ Describe 'qvcp -G (generic yt-dlp mode)' {
         $global:QvcpTestExitCode = 1
 
         { qvcp -G 'https://example.com/a.mp4' -WarningAction SilentlyContinue } |
-            Should -Throw -ExpectedMessage '*exit code 1*use -Y instead*'
+            Should -Throw -ExpectedMessage '*exit code 1*For YouTube use -Y*for Reddit use -R*'
     }
 
     It 'embeds metadata, the source URL field, and the tagged comment' {
@@ -247,6 +247,30 @@ Describe 'qvcp -Y (YouTube mode)' {
         $call = $global:QvcpTestCalls[0]
         $call | Should -Not -Contain '--cookies'
         $call | Should -Not -Contain '--ignore-config'
+    }
+
+    It 'uses an explicit browser session for Reddit and YouTube without the saved cookie file' {
+        qvcp -Y -CookiesFromBrowser 'firefox:work' 'https://v.redd.it/test' 'https://youtu.be/test'
+
+        $global:QvcpTestCalls.Count | Should -Be 2
+        foreach ($call in $global:QvcpTestCalls) {
+            Get-QvcpArgAfter -Arguments $call -Flag '--cookies-from-browser' | Should -Be 'firefox:work'
+            $call | Should -Contain '--ignore-config'
+            $call | Should -Contain '--no-cookies'
+            $call | Should -Not -Contain '--cookies'
+            $call | Should -Not -Contain '--no-cookies-from-browser'
+        }
+    }
+
+    It 'rejects browser cookies in generic mode before invoking yt-dlp' {
+        { qvcp -G -CookiesFromBrowser firefox 'https://v.redd.it/test' } | Should -Throw
+        $global:QvcpTestCalls.Count | Should -Be 0
+    }
+
+    It 'explains how to supply a Reddit browser session' {
+        $global:QvcpTestExitCode = 1
+        { qvcp -G 'https://v.redd.it/test' -WarningAction SilentlyContinue } |
+            Should -Throw -ExpectedMessage '*Reddit use -R*'
     }
 
     It 'embeds metadata, the source URL field, and the tagged comment' {
@@ -390,5 +414,31 @@ Describe 'qvcp window title handling' {
         finally {
             $Host.UI.RawUI.WindowTitle = $original
         }
+    }
+}
+
+Describe 'qvcp -R (Reddit preset)' {
+    BeforeEach { Reset-QvcpTestState }
+
+    It 'uses Firefox cookies for each URL by default' {
+        qvcp -R 'https://v.redd.it/test' 'https://www.reddit.com/r/test/comments/test/'
+        $global:QvcpTestCalls.Count | Should -Be 2
+        foreach ($call in $global:QvcpTestCalls) {
+            Get-QvcpArgAfter -Arguments $call -Flag '--cookies-from-browser' | Should -Be 'firefox'
+            $call | Should -Contain '--ignore-config'
+            $call | Should -Contain '--embed-metadata'
+            $call | Should -Not -Contain '--cookies'
+        }
+    }
+
+    It 'accepts an explicit browser profile' {
+        qvcp -R -CookiesFromBrowser 'firefox:work' 'https://v.redd.it/test'
+        Get-QvcpArgAfter -Arguments $global:QvcpTestCalls[0] -Flag '--cookies-from-browser' | Should -Be 'firefox:work'
+    }
+
+    It 'rejects combining Reddit with another mode' {
+        { qvcp -R -G 'https://v.redd.it/test' } | Should -Throw
+        { qvcp -R -Y 'https://v.redd.it/test' } | Should -Throw
+        $global:QvcpTestCalls.Count | Should -Be 0
     }
 }
