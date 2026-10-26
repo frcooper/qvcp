@@ -88,7 +88,15 @@ qvcp -G "https://example.com/a.mp4" "https://example.com/b.mp4"
 
 `-G` runs yt-dlp with `--ignore-config --no-cookies --no-cookies-from-browser`, so neither the cookies file nor anything in your personal `yt-dlp.conf` can slip a session in. Because `--ignore-config` also discards your own format and output-template preferences, `-G` downloads use yt-dlp's defaults.
 
-`-Y` and `-G` are mutually exclusive — passing both is a parameter-binding error. If a `-G` download fails on a sign-in wall, retry it with `-Y`.
+`-Y` and `-G` are mutually exclusive — passing both is a parameter-binding error. If a `-G` download fails on a YouTube sign-in wall, retry it with `-Y`. Plain `-Y` only attaches the saved cookies file to YouTube URLs.
+
+For Reddit or another site that requires a browser session, open the site in Firefox, complete any challenge or sign-in, then use:
+
+```powershell
+qvcp -R "https://v.redd.it/taxq7iaf7txh1"
+```
+
+`-CookiesFromBrowser` accepts yt-dlp's browser selector (including `browser:profile`) and explicitly uses that browser session for every URL in the call, including YouTube, instead of the saved YouTube cookies file. It ignores personal yt-dlp configuration. It is available with `-Y` and `-R`; `-G` always stays cookie-free. The Reddit preset `-R` defaults to Firefox cookies; use `-R -CookiesFromBrowser firefox:profile` to select another profile or browser. `-Y`, `-G`, and `-R` are mutually exclusive. Reddit may report “Account authentication is required” when its automated-request challenge blocks metadata access, even for public posts; updating yt-dlp alone may not resolve that. Browser cookies are an option to try, not a guarantee that Reddit will accept the request.
 
 ### Output folder
 

@@ -7,6 +7,7 @@ function qvcp {
         [Parameter(ParameterSetName='FFmpeg', Mandatory=$true, Position=1)]
         [Parameter(ParameterSetName='YouTube', Mandatory=$true, Position=0, ValueFromRemainingArguments=$true)]
         [Parameter(ParameterSetName='Generic', Mandatory=$true, Position=0, ValueFromRemainingArguments=$true)]
+        [Parameter(ParameterSetName='Reddit', Mandatory=$true, Position=0, ValueFromRemainingArguments=$true)]
         [string[]]$Url,
 
         [Parameter(ParameterSetName='YouTube', Mandatory=$true)]
@@ -16,10 +17,22 @@ function qvcp {
         [Alias('Generic')]
         [switch]$G,
 
+        [Parameter(ParameterSetName='Reddit', Mandatory=$true)]
+        [switch]$R,
+
+        # Explicit browser session for every URL in this invocation, including
+        # non-YouTube sites. Accepts yt-dlp's browser[:profile] syntax.
+        [Parameter(ParameterSetName='YouTube')]
+        [Parameter(ParameterSetName='Reddit')]
+        [ValidateNotNullOrEmpty()]
+        [string]$CookiesFromBrowser,
+
         # Download into this folder instead of the dated one under the
         # output root. ytxa -Upgrade uses it to replace a file in place.
         [string]$OutDir
     )
+
+    if ($R -and -not $CookiesFromBrowser) { $CookiesFromBrowser = 'firefox' }
 
     $YTDLP_COOKIES_FILE = 'cookies.firefox-private.txt'
     # FROM:TO for yt-dlp --parse-metadata, split on the first unescaped colon.
@@ -56,7 +69,7 @@ function qvcp {
             }
         }
 
-        if ($Y -or $G) {
+        if ($Y -or $G -or $R) {
             if (-not (Get-Command 'yt-dlp' -ErrorAction SilentlyContinue)) {
                 throw "yt-dlp not found on PATH"
             }
@@ -74,7 +87,7 @@ function qvcp {
 
             $ytDlpCookiesPath = $null
 
-            if ($Y) {
+            if ($Y -and -not $CookiesFromBrowser) {
                 $hasYouTubeUrl = $false
                 foreach ($u in $Url) {
                     if ([string]::IsNullOrWhiteSpace($u)) {
@@ -112,6 +125,9 @@ function qvcp {
                 if ($G) {
                     $ytDlpArgs += @('--ignore-config', '--no-cookies', '--no-cookies-from-browser')
                 }
+                elseif ($CookiesFromBrowser) {
+                    $ytDlpArgs += @('--ignore-config', '--no-cookies', '--cookies-from-browser', $CookiesFromBrowser)
+                }
                 else {
                     $uri = $null
                     $isYouTube = [Uri]::TryCreate($u, [UriKind]::Absolute, [ref]$uri) -and $youtubeHosts -contains $uri.Host.ToLowerInvariant()
@@ -144,10 +160,13 @@ function qvcp {
                     "  * nsig/SABR warnings, or only image formats offered: update with 'yt-dlp -U'."
                 )
                 if ($G) {
-                    $hints += "  * Sign-in required: generic mode sends no cookies, so use -Y instead."
+                    $hints += "  * Sign-in required: generic mode sends no cookies. For YouTube use -Y; for Reddit use -R, or for another site use -Y -CookiesFromBrowser firefox (after opening the site in that browser)."
                 }
                 else {
                     $hints += "  * 'tv downgraded player' in the log, or only m3u8 formats offered: YouTube is SABR-restricting the signed-in clients, which leaves HLS capped at 1080p. For public videos retry with -G (no cookies, full DASH ladder), and update with 'yt-dlp -U'."
+                }
+                if ($Y -or $R) {
+                    $hints += "  * Reddit / other site authentication or 403: open the site in your browser and complete any challenge or sign-in, then retry with -R (Firefox), or -R -CookiesFromBrowser browser[:profile]. Plain -Y only supplies the saved cookies file to YouTube."
                 }
                 $attempted = @($Url | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count
                 $lines = @($failed | ForEach-Object { "  '$($_.Url)' (exit code $($_.ExitCode))" })
