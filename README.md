@@ -92,7 +92,7 @@ qvcp -G "https://example.com/a.mp4" "https://example.com/b.mp4"
 
 For Reddit or another site that requires a browser session, open the site in Firefox, complete any challenge or sign-in, then use:
 
-```powershell
+```pwsh
 qvcp -R "https://v.redd.it/taxq7iaf7txh1"
 ```
 
