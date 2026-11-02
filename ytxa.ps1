@@ -1,3 +1,7 @@
+# Output root, cookies path, id matching and the SourceURL sigil are shared
+# with qvcp.ps1 through this module, which has to sit next to this file.
+Import-Module (Join-Path $PSScriptRoot 'QvcpCommon.psm1') -Force
+
 function ytxa {
     <#
     .SYNOPSIS
@@ -84,22 +88,9 @@ function ytxa {
         [switch]$Upgrade
     )
 
-    # Kept in sync with qvcp.ps1 by hand; the two files are dot-sourced
-    # independently, so there is no shared module to import.
-    $YTDLP_COOKIES_FILE = 'cookies.firefox-private.txt'
-    $QVCP_OUTPUT_ROOT   = if ([string]::IsNullOrWhiteSpace($env:QVCP_OUTPUT_ROOT)) { 'X:\in\clips' } else { $env:QVCP_OUTPUT_ROOT }
-
-    # yt-dlp's default output template ends in " [%(id)s].%(ext)s". Only the
-    # bracketed form is matched: an 11-character id can appear by chance in
-    # any title, so a bare match would flood the report with false positives.
-    $ID_IN_NAME   = '\[(?<id>[A-Za-z0-9_-]{11})\]$'
-    $ID_IN_URL    = '(?:[?&]v=|youtu\.be/|/shorts/|/embed/|/live/)(?<id>[A-Za-z0-9_-]{11})'
-    $SOURCE_SIGIL = '\[\[SourceURL\|(?<url>.*?)\]\]'
-    $VIDEO_EXT    = @('.mp4', '.mkv', '.webm', '.mov', '.m4v')
-
     $Path = @($Path | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
     if ($Path.Count -eq 0) {
-        $Path = @($QVCP_OUTPUT_ROOT)
+        $Path = @(Get-QvcpOutputRoot)
     }
     if (-not (Get-Command 'ffprobe' -ErrorAction SilentlyContinue)) {
         throw "ffprobe not found on PATH"
@@ -123,7 +114,7 @@ function ytxa {
         # The cookies file is optional unless -UseCookies demands it: without
         # the switch it only serves the sign-in retry, and its absence simply
         # leaves those ids Unavailable with yt-dlp's reason.
-        $ytDlpCookiesPath = Join-Path ([Environment]::GetFolderPath('MyDocuments')) $YTDLP_COOKIES_FILE
+        $ytDlpCookiesPath = Get-QvcpCookiesPath
         if (-not (Test-Path -LiteralPath $ytDlpCookiesPath -PathType Leaf)) {
             if ($UseCookies) {
                 throw "Cookies file not found: '$ytDlpCookiesPath'"
@@ -153,7 +144,7 @@ function ytxa {
     # (.description, .jpg), which carry the same "[id]" suffix. A file named
     # outright is taken as-is and ffprobe decides. Literal lookups come first
     # because '[' in a real name is also a wildcard character.
-    $isCandidate = { $VIDEO_EXT -contains $_.Extension.ToLowerInvariant() -and $_.BaseName -match $ID_IN_NAME }
+    $isCandidate = { (Test-QvcpVideoFile $_) -and (Get-QvcpNameId $_.BaseName) }
     $seen  = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     $files = [System.Collections.Generic.List[System.IO.FileInfo]]::new()
     foreach ($spec in $Path) {
@@ -162,7 +153,7 @@ function ytxa {
         }
         elseif (Test-Path -LiteralPath $spec -PathType Leaf) {
             $item = Get-Item -LiteralPath $spec
-            if ($item.BaseName -notmatch $ID_IN_NAME) {
+            if (-not (Get-QvcpNameId $item.BaseName)) {
                 Write-Warning "No [id] in the file name, skipped: '$spec'"
                 continue
             }
@@ -196,7 +187,7 @@ function ytxa {
         $i++
         Write-Progress -Activity 'Reading metadata' -Status $file.Name -PercentComplete (100 * $i / $files.Count)
 
-        $id = [regex]::Match($file.BaseName, $ID_IN_NAME).Groups['id'].Value
+        $id = Get-QvcpNameId $file.BaseName
 
         $row = [pscustomobject]@{
             Path            = $file.FullName
@@ -230,21 +221,12 @@ function ytxa {
             continue
         }
 
-        $meta = @{ Duration = ($probe.format.duration -as [double]); Comment = $null }
+        $meta = @{ Duration = ($probe.format.duration -as [double]); Comment = (Get-QvcpCommentTag $probe.format.tags) }
         $fileMeta[$file.FullName] = $meta
 
-        $tags = $probe.format.tags
-        if ($tags) {
-            foreach ($prop in $tags.PSObject.Properties) {
-                if ($prop.Name -ine 'comment') { continue }
-                $meta.Comment = [string]$prop.Value
-                $m = [regex]::Match([string]$prop.Value, $SOURCE_SIGIL)
-                if ($m.Success) {
-                    $row.SourceUrl = $m.Groups['url'].Value
-                    $urlId = [regex]::Match($row.SourceUrl, $ID_IN_URL).Groups['id'].Value
-                    $row.SourceUrlStatus = if ($urlId -eq $id) { 'OK' } else { 'Mismatch' }
-                }
-            }
+        $row.SourceUrl = Get-QvcpSourceUrl $meta.Comment
+        if ($row.SourceUrl) {
+            $row.SourceUrlStatus = if (Test-QvcpSourceComment $meta.Comment $id) { 'OK' } else { 'Mismatch' }
         }
 
         $res = $null
@@ -415,11 +397,10 @@ function ytxa {
                 if ($ytDlpCookiesPath) { qvcp -Y $url -OutDir $dir } else { qvcp -G $url -OutDir $dir }
 
                 # The new name is whatever yt-dlp chose (the title may have
-                # changed, the container may differ), so find it by id.
-                $newFile = Get-ChildItem -LiteralPath $dir -File |
-                    Where-Object { $_.FullName -ne $aside -and $VIDEO_EXT -contains $_.Extension.ToLowerInvariant() -and $_.BaseName -match "\[$([regex]::Escape($row.Id))\]$" } |
-                    Sort-Object LastWriteTime -Descending |
-                    Select-Object -First 1
+                # changed, the container may differ), so find it by id. The
+                # old file, now ending in .ytxa-old, is not a video file and
+                # so cannot be mistaken for it.
+                $newFile = Find-QvcpDownload $dir $row.Id | Select-Object -First 1
                 if (-not $newFile) {
                     throw "qvcp returned without error but no new file with [$($row.Id)] appeared in '$dir'"
                 }
@@ -484,7 +465,7 @@ function ytxa {
             }
 
             $url   = "https://www.youtube.com/watch?v=$($row.Id)"
-            $sigil = "[[SourceURL|$url]]"
+            $sigil = Format-QvcpSourceSigil $url
             # Same shape as qvcp's download: the sigil leads. Anything the
             # comment already held stays behind it.
             $existing = $fileMeta[$row.Path].Comment
@@ -511,15 +492,7 @@ function ytxa {
                     throw "ffmpeg failed (exit code $LASTEXITCODE): $($output -join ' ')"
                 }
 
-                $written = $null
-                $checkText = & ffprobe -v error -show_entries 'format_tags' -of json -i $tmp 2>$null
-                if ($LASTEXITCODE -eq 0 -and $checkText) {
-                    $check = ($checkText -join "`n") | ConvertFrom-Json
-                    foreach ($prop in @($check.format.tags.PSObject.Properties)) {
-                        if ($prop.Name -ieq 'comment') { $written = [string]$prop.Value }
-                    }
-                }
-                if (-not $written -or -not [regex]::Match($written, $SOURCE_SIGIL).Success) {
+                if (-not (Test-QvcpSourceComment (Read-QvcpComment $tmp) $row.Id)) {
                     throw "the comment did not survive the remux"
                 }
 
