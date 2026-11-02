@@ -115,7 +115,10 @@ function qvcp {
                 $id = Get-QvcpUrlId $TargetUrl
                 if (-not $id) { return $null }
 
-                $existing = Find-QvcpDownload $folder $id
+                # @() here, not just inside the function: its output is unrolled,
+                # so no match arrives as $null, and under Set-StrictMode .Count
+                # on $null (or on a lone FileInfo) throws.
+                $existing = @(Find-QvcpDownload $folder $id)
                 if ($existing.Count -eq 0) { return $null }
 
                 # Every copy has to be tagged: an untagged one may be the file
