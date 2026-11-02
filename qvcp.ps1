@@ -191,12 +191,56 @@ function qvcp {
                 }
             }
 
-            & ffmpeg `
-                -i $Url[0] `
-                -c copy `
-                -metadata title="$Word" `
-                -metadata comment="$($Url[0])" `
-                $outputPath
+            # Streamlink is the default capture tool because certificate
+            # verification can be turned off for every request it makes. ffmpeg
+            # 8+ verifies by default and applies -tls_verify only to the URL it
+            # opens itself, not to the playlists and segments the HLS/DASH
+            # demuxer fetches, so a stream host with a bad cert fails there.
+            $captured = $false
+
+            if (Get-Command 'streamlink' -ErrorAction SilentlyContinue) {
+                # Streamlink writes the raw stream, so capture to .ts and remux
+                # to the mp4 afterwards. The remux sits in finally so a live
+                # capture stopped with Ctrl+C still ends up as the mp4.
+                $tsPath = [System.IO.Path]::ChangeExtension($outputPath, '.qvcp.ts')
+                $scheme = if ($Url[0] -match '\.mpd($|\?)') { 'dash://' } else { 'hls://' }
+                # Without verification urllib3 warns on every request, which
+                # floods the console for the length of a live capture.
+                $savedPythonWarnings = $env:PYTHONWARNINGS
+                $env:PYTHONWARNINGS = 'ignore:Unverified HTTPS request'
+                try {
+                    & streamlink --http-no-ssl-verify --force -o $tsPath ($scheme + $Url[0]) best
+                }
+                finally {
+                    $env:PYTHONWARNINGS = $savedPythonWarnings
+                    if ((Test-Path -LiteralPath $tsPath -PathType Leaf) -and (Get-Item -LiteralPath $tsPath).Length -gt 0) {
+                        & ffmpeg -i $tsPath -c copy -metadata title="$Word" -metadata comment="$($Url[0])" $outputPath
+                        if ($LASTEXITCODE -ne 0) {
+                            throw "Remux to '$outputPath' failed (exit code $LASTEXITCODE); the Streamlink capture is kept at '$tsPath'."
+                        }
+                        Remove-Item -LiteralPath $tsPath -Force
+                        $captured = $true
+                    }
+                }
+
+                if (-not $captured) {
+                    Write-Warning "Streamlink captured nothing from '$($Url[0])'; trying ffmpeg."
+                }
+            }
+
+            if (-not $captured) {
+                & ffmpeg `
+                    -tls_verify 0 `
+                    -i $Url[0] `
+                    -c copy `
+                    -metadata title="$Word" `
+                    -metadata comment="$($Url[0])" `
+                    $outputPath
+
+                if ($LASTEXITCODE -ne 0 -and -not (Get-Command 'streamlink' -ErrorAction SilentlyContinue)) {
+                    Write-Warning "ffmpeg exited $LASTEXITCODE. If it reported 'Peer certificate failed verification', install Streamlink (winget install Streamlink.Streamlink): qvcp uses it when present, with verification off."
+                }
+            }
         }
     }
     finally {

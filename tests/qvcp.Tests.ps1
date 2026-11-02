@@ -62,16 +62,35 @@ BeforeAll {
 
     function global:ffmpeg {
         $global:QvcpTestCalls  += , ([string[]]$args)
+        $global:QvcpTestTools  += 'ffmpeg'
         $global:QvcpTestTitles += $Host.UI.RawUI.WindowTitle
         $global:LASTEXITCODE = Get-QvcpStubExitCode
     }
+
+    # Stream capture mode prefers Streamlink whenever it resolves, so the
+    # no-Streamlink tests remove this stub and put it back afterwards.
+    function global:Add-QvcpStreamlinkStub {
+        Set-Item -Path 'function:global:streamlink' -Value {
+            $global:QvcpTestCalls  += , ([string[]]$args)
+            $global:QvcpTestTools  += 'streamlink'
+            $global:QvcpTestPythonWarnings = $env:PYTHONWARNINGS
+            $global:QvcpTestTitles += $Host.UI.RawUI.WindowTitle
+            $global:LASTEXITCODE = Get-QvcpStubExitCode
+            if ($global:QvcpTestStreamlinkWrites) {
+                Set-Content -LiteralPath (Get-QvcpArgAfter -Arguments $args -Flag '-o') -Value 'ts' -NoNewline
+            }
+        }
+    }
+    Add-QvcpStreamlinkStub
 
     # Pester does not allow BeforeEach at the container root, so each Describe
     # calls this instead.
     function global:Reset-QvcpTestState {
         $global:QvcpTestCalls    = @()
+        $global:QvcpTestTools    = @()
         $global:QvcpTestTitles   = @()
         $global:QvcpTestExitCode = 0
+        $global:QvcpTestStreamlinkWrites = $true
     }
 
     function global:Get-QvcpArgAfter {
@@ -85,6 +104,8 @@ BeforeAll {
 AfterAll {
     Remove-Item -Path 'function:yt-dlp'          -ErrorAction SilentlyContinue
     Remove-Item -Path 'function:ffmpeg'          -ErrorAction SilentlyContinue
+    Remove-Item -Path 'function:Add-QvcpStreamlinkStub' -ErrorAction SilentlyContinue
+    Remove-Item -Path 'function:streamlink'      -ErrorAction SilentlyContinue
     Remove-Item -Path 'function:Get-QvcpStubExitCode' -ErrorAction SilentlyContinue
     Remove-Item -Path 'function:Get-QvcpArgAfter' -ErrorAction SilentlyContinue
     Remove-Item -Path 'function:Reset-QvcpTestState' -ErrorAction SilentlyContinue
@@ -96,7 +117,8 @@ AfterAll {
         Remove-Item -LiteralPath $global:QvcpTestRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
 
-    Remove-Variable -Name QvcpTestCalls, QvcpTestTitles, QvcpTestExitCode, QvcpTestRoot,
+    Remove-Variable -Name QvcpTestCalls, QvcpTestTools, QvcpTestTitles, QvcpTestExitCode, QvcpTestRoot,
+        QvcpTestStreamlinkWrites, QvcpTestPythonWarnings,
         QvcpTestCookiesPath, QvcpTestOriginalOutputRoot,
         QvcpTestHasCookies, QvcpTestCanSetTitle -Scope Global -ErrorAction SilentlyContinue
 }
@@ -302,34 +324,67 @@ Describe 'qvcp -Y (YouTube mode)' {
     }
 }
 
-Describe 'qvcp (ffmpeg mode)' {
+Describe 'qvcp (stream capture mode, Streamlink)' {
 
     BeforeEach { Reset-QvcpTestState }
 
-    It '-OutDir applies to ffmpeg mode too' {
+    It 'captures with Streamlink, without certificate verification' {
+        qvcp 'My Clip' 'https://example.com/stream.m3u8'
+
+        $global:QvcpTestTools | Should -Be @('streamlink', 'ffmpeg')
+        $sl = $global:QvcpTestCalls[0]
+        $sl | Should -Contain '--http-no-ssl-verify'
+        $sl[-2] | Should -Be 'hls://https://example.com/stream.m3u8'
+        $sl[-1] | Should -Be 'best'
+    }
+
+    It 'silences the per-request insecure warning for Streamlink only' {
+        $saved = $env:PYTHONWARNINGS
+        try {
+            $env:PYTHONWARNINGS = 'default'
+            qvcp 'My Clip' 'https://example.com/stream.m3u8'
+
+            $global:QvcpTestPythonWarnings | Should -Be 'ignore:Unverified HTTPS request'
+            $env:PYTHONWARNINGS | Should -Be 'default'
+        }
+        finally {
+            $env:PYTHONWARNINGS = $saved
+        }
+    }
+
+    It 'asks Streamlink for DASH when the URL is an MPD' {
+        qvcp 'My Clip' 'https://example.com/manifest.mpd?t=1'
+
+        $global:QvcpTestCalls[0][-2] | Should -Be 'dash://https://example.com/manifest.mpd?t=1'
+    }
+
+    It 'remuxes the capture to an mp4 named after the label, with metadata, and removes the .ts' {
+        qvcp 'My Clip' 'https://example.com/stream.m3u8'
+
+        $ts = Join-Path (Get-QvcpMonthFolder) 'My Clip.qvcp.ts'
+        Get-QvcpArgAfter -Arguments $global:QvcpTestCalls[0] -Flag '-o' | Should -Be $ts
+        $remux = $global:QvcpTestCalls[1]
+        Get-QvcpArgAfter -Arguments $remux -Flag '-i' | Should -Be $ts
+        $remux | Should -Contain '-c'
+        $remux | Should -Contain 'copy'
+        $remux | Should -Contain 'title=My Clip'
+        $remux | Should -Contain 'comment=https://example.com/stream.m3u8'
+        $remux[-1] | Should -Be (Join-Path (Get-QvcpMonthFolder) 'My Clip.mp4')
+        Test-Path -LiteralPath $ts | Should -BeFalse
+    }
+
+    It '-OutDir applies to stream capture mode too' {
         $dir = Join-Path $global:QvcpTestRoot 'elsewhere'
 
         qvcp 'My Clip' 'https://example.com/stream.m3u8' -OutDir $dir
 
-        $global:QvcpTestCalls[0][-1] | Should -Be (Join-Path $dir 'My Clip.mp4')
-    }
-
-    It 'remuxes to an mp4 named after the label, with metadata' {
-        qvcp 'My Clip' 'https://example.com/stream.m3u8'
-
-        $call = $global:QvcpTestCalls[0]
-        Get-QvcpArgAfter -Arguments $call -Flag '-i' | Should -Be 'https://example.com/stream.m3u8'
-        $call | Should -Contain '-c'
-        $call | Should -Contain 'copy'
-        $call | Should -Contain 'title=My Clip'
-        $call | Should -Contain 'comment=https://example.com/stream.m3u8'
-        $call[-1] | Should -Be (Join-Path (Get-QvcpMonthFolder) 'My Clip.mp4')
+        $global:QvcpTestCalls[-1][-1] | Should -Be (Join-Path $dir 'My Clip.mp4')
     }
 
     It 'sanitizes characters that are illegal in file names' {
         qvcp 'a:b*c?d' 'https://example.com/stream.m3u8'
 
-        $global:QvcpTestCalls[0][-1] | Should -Be (Join-Path (Get-QvcpMonthFolder) 'a_b_c_d.mp4')
+        $global:QvcpTestCalls[-1][-1] | Should -Be (Join-Path (Get-QvcpMonthFolder) 'a_b_c_d.mp4')
     }
 
     It 'appends a numeric suffix when the target already exists' {
@@ -338,7 +393,69 @@ Describe 'qvcp (ffmpeg mode)' {
 
         qvcp 'Dupe' 'https://example.com/stream.m3u8'
 
-        $global:QvcpTestCalls[0][-1] | Should -Be (Join-Path (Get-QvcpMonthFolder) 'Dupe-2.mp4')
+        $global:QvcpTestCalls[-1][-1] | Should -Be (Join-Path (Get-QvcpMonthFolder) 'Dupe-2.mp4')
+    }
+
+    It 'keeps the .ts and throws when the remux fails' {
+        $global:QvcpTestExitCode = @(0, 1)
+
+        { qvcp 'Remux Fail' 'https://example.com/stream.m3u8' } | Should -Throw '*capture is kept*'
+        Test-Path -LiteralPath (Join-Path (Get-QvcpMonthFolder) 'Remux Fail.qvcp.ts') | Should -BeTrue
+    }
+
+    It 'falls back to ffmpeg with a warning when Streamlink captures nothing' {
+        $global:QvcpTestStreamlinkWrites = $false
+        $global:QvcpTestExitCode = 1
+
+        qvcp 'My Clip' 'https://example.com/stream.m3u8' -WarningVariable w -WarningAction SilentlyContinue
+
+        "$w" | Should -Match 'Streamlink captured nothing'
+        $global:QvcpTestTools | Should -Be @('streamlink', 'ffmpeg')
+        Get-QvcpArgAfter -Arguments $global:QvcpTestCalls[1] -Flag '-i' | Should -Be 'https://example.com/stream.m3u8'
+    }
+}
+
+Describe 'qvcp (stream capture mode, no Streamlink)' {
+
+    BeforeEach {
+        Reset-QvcpTestState
+        # A real Streamlink may be installed alongside the stub; every tool
+        # qvcp still needs here is a stub function, so PATH can go.
+        $script:savedPath = $env:PATH
+        $env:PATH = ''
+        Remove-Item -Path 'function:streamlink'
+    }
+
+    AfterEach {
+        $env:PATH = $script:savedPath
+        Add-QvcpStreamlinkStub
+    }
+
+    It 'remuxes the URL with ffmpeg, verification off, with metadata' {
+        qvcp 'My Clip' 'https://example.com/stream.m3u8'
+
+        $global:QvcpTestTools | Should -Be @('ffmpeg')
+        $call = $global:QvcpTestCalls[0]
+        Get-QvcpArgAfter -Arguments $call -Flag '-i' | Should -Be 'https://example.com/stream.m3u8'
+        Get-QvcpArgAfter -Arguments $call -Flag '-tls_verify' | Should -Be '0'
+        [Array]::IndexOf($call, '-tls_verify') | Should -BeLessThan ([Array]::IndexOf($call, '-i'))
+        $call | Should -Contain 'title=My Clip'
+        $call | Should -Contain 'comment=https://example.com/stream.m3u8'
+        $call[-1] | Should -Be (Join-Path (Get-QvcpMonthFolder) 'My Clip.mp4')
+    }
+
+    It 'points at installing Streamlink when ffmpeg fails' {
+        $global:QvcpTestExitCode = 1
+
+        qvcp 'My Clip' 'https://example.com/stream.m3u8' -WarningVariable w -WarningAction SilentlyContinue
+
+        "$w" | Should -Match 'winget install Streamlink\.Streamlink'
+    }
+
+    It 'warns about nothing when ffmpeg succeeds' {
+        qvcp 'My Clip' 'https://example.com/stream.m3u8' -WarningVariable w
+
+        $w | Should -BeNullOrEmpty
     }
 }
 
