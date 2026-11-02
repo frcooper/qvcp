@@ -345,6 +345,31 @@ Describe 'qvcp re-run over an existing download' {
         $global:QvcpTestCalls.Count | Should -Be 1
         $global:QvcpTestCalls[0][-1] | Should -Be 'https://www.youtube.com/watch?v=bbbbbbbbbbb'
     }
+
+    # A profile script can leave Set-StrictMode on for the whole session, and a
+    # function's scope inherits it from the caller. No match and a single match
+    # are the two cases where the lookup's array does not survive the return.
+    It 'works under Set-StrictMode when no copy exists' {
+        try {
+            Set-StrictMode -Version Latest
+            qvcp -G 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' 6>$null
+        }
+        finally { Set-StrictMode -Off }
+
+        $global:QvcpTestCalls.Count | Should -Be 1
+    }
+
+    It 'works under Set-StrictMode when one tagged copy exists' {
+        New-Download 'Clip [dQw4w9WgXcQ].mp4' "[[SourceURL|https://www.youtube.com/watch?v=dQw4w9WgXcQ]]"
+
+        try {
+            Set-StrictMode -Version Latest
+            qvcp -G 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' 6>$null
+        }
+        finally { Set-StrictMode -Off }
+
+        $global:QvcpTestCalls.Count | Should -Be 0
+    }
 }
 
 Describe 'qvcp -Y (YouTube mode)' {
