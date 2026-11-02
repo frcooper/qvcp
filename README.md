@@ -37,7 +37,9 @@ qvcp "Show • Episode 12" "https://example.com/path/to/master.m3u8?token=..."
 
 - Saves into `X:\in\clips\YYYY-MM\` (auto-creates the month folder); `-OutDir <folder>` overrides that for one call.
 - Sanitizes the label for filenames and appends `-1`, `-2`, … if a duplicate exists.
-- Runs `ffmpeg -c copy` so the stream is remuxed without re-encoding.
+- Captures with Streamlink when it is on `PATH` (`winget install Streamlink.Streamlink`), into a temporary `<label>.qvcp.ts`, then remuxes that to the mp4 with `ffmpeg -c copy`. Stopping a live capture with Ctrl+C still produces the mp4.
+- TLS certificate verification is off: a stream host with a bad or incomplete certificate chain is not worth failing over. Streamlink is preferred for that reason, since ffmpeg 8+ verifies by default and its `-tls_verify 0` reaches only the URL it opens itself, not the playlists and segments it fetches afterwards. A stream with a bad certificate on those fails in ffmpeg with `Peer certificate failed verification`.
+- Without Streamlink, or when Streamlink captures nothing, it runs `ffmpeg -tls_verify 0 -c copy` on the URL directly, so the stream is remuxed without re-encoding.
 - Records the title and original URL as `title` / `comment` metadata tags.
 - Temporarily sets the terminal title to the label to make long captures easy to identify.
 
@@ -90,7 +92,15 @@ qvcp -G "https://example.com/a.mp4" "https://example.com/b.mp4"
 
 `-G` runs yt-dlp with `--ignore-config --no-cookies --no-cookies-from-browser`, so neither the cookies file nor anything in your personal `yt-dlp.conf` can slip a session in. Because `--ignore-config` also discards your own format and output-template preferences, `-G` downloads use yt-dlp's defaults.
 
-`-Y` and `-G` are mutually exclusive — passing both is a parameter-binding error. If a `-G` download fails on a sign-in wall, retry it with `-Y`.
+`-Y` and `-G` are mutually exclusive — passing both is a parameter-binding error. If a `-G` download fails on a YouTube sign-in wall, retry it with `-Y`. Plain `-Y` only attaches the saved cookies file to YouTube URLs.
+
+For Reddit or another site that requires a browser session, open the site in Firefox, complete any challenge or sign-in, then use:
+
+```pwsh
+qvcp -R "https://v.redd.it/taxq7iaf7txh1"
+```
+
+`-CookiesFromBrowser` accepts yt-dlp's browser selector (including `browser:profile`) and explicitly uses that browser session for every URL in the call, including YouTube, instead of the saved YouTube cookies file. It ignores personal yt-dlp configuration. It is available with `-Y` and `-R`; `-G` always stays cookie-free. The Reddit preset `-R` defaults to Firefox cookies; use `-R -CookiesFromBrowser firefox:profile` to select another profile or browser. `-Y`, `-G`, and `-R` are mutually exclusive. Reddit may report “Account authentication is required” when its automated-request challenge blocks metadata access, even for public posts; updating yt-dlp alone may not resolve that. Browser cookies are an option to try, not a guarantee that Reddit will accept the request.
 
 ### Output folder
 
@@ -153,7 +163,7 @@ Why a PO token provider at all: YouTube's web clients now require a proof-of-ori
 
 ### Tests
 
-The PowerShell helpers have a [Pester](https://pester.dev) suite in [tests/](tests/). It stubs out `yt-dlp` / `ffmpeg` / `ffprobe` / `winget` / `git` / `deno` and asserts on the argument lists, so nothing is downloaded, installed, or written outside a temp folder.
+The PowerShell helpers have a [Pester](https://pester.dev) suite in [tests/](tests/). It stubs out `yt-dlp` / `ffmpeg` / `ffprobe` / `streamlink` / `winget` / `git` / `deno` and asserts on the argument lists, so nothing is downloaded, installed, or written outside a temp folder.
 
 ```pwsh
 ./tests/run-tests.ps1

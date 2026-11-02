@@ -11,6 +11,7 @@ function qvcp {
         [Parameter(ParameterSetName='FFmpeg', Mandatory=$true, Position=1)]
         [Parameter(ParameterSetName='YouTube', Mandatory=$true, Position=0, ValueFromRemainingArguments=$true)]
         [Parameter(ParameterSetName='Generic', Mandatory=$true, Position=0, ValueFromRemainingArguments=$true)]
+        [Parameter(ParameterSetName='Reddit', Mandatory=$true, Position=0, ValueFromRemainingArguments=$true)]
         [string[]]$Url,
 
         [Parameter(ParameterSetName='YouTube', Mandatory=$true)]
@@ -20,10 +21,22 @@ function qvcp {
         [Alias('Generic')]
         [switch]$G,
 
+        [Parameter(ParameterSetName='Reddit', Mandatory=$true)]
+        [switch]$R,
+
+        # Explicit browser session for every URL in this invocation, including
+        # non-YouTube sites. Accepts yt-dlp's browser[:profile] syntax.
+        [Parameter(ParameterSetName='YouTube')]
+        [Parameter(ParameterSetName='Reddit')]
+        [ValidateNotNullOrEmpty()]
+        [string]$CookiesFromBrowser,
+
         # Download into this folder instead of the dated one under the
         # output root. ytxa -Upgrade uses it to replace a file in place.
         [string]$OutDir
     )
+
+    if ($R -and -not $CookiesFromBrowser) { $CookiesFromBrowser = 'firefox' }
 
     # FROM:TO for yt-dlp --parse-metadata, split on the first unescaped colon.
     # The sigil deliberately contains no colon, so nothing here needs escaping,
@@ -58,14 +71,14 @@ function qvcp {
             }
         }
 
-        if ($Y -or $G) {
+        if ($Y -or $G -or $R) {
             if (-not (Get-Command 'yt-dlp' -ErrorAction SilentlyContinue)) {
                 throw "yt-dlp not found on PATH"
             }
 
             $ytDlpCookiesPath = $null
 
-            if ($Y) {
+            if ($Y -and -not $CookiesFromBrowser) {
                 $hasYouTubeUrl = $false
                 foreach ($u in $Url) {
                     if ([string]::IsNullOrWhiteSpace($u)) {
@@ -136,6 +149,9 @@ function qvcp {
                 if ($G) {
                     $ytDlpArgs += @('--ignore-config', '--no-cookies', '--no-cookies-from-browser')
                 }
+                elseif ($CookiesFromBrowser) {
+                    $ytDlpArgs += @('--ignore-config', '--no-cookies', '--cookies-from-browser', $CookiesFromBrowser)
+                }
                 else {
                     if (Test-QvcpYouTubeUrl $u) {
                         $ytDlpArgs += @('--ignore-config', '--cookies', $ytDlpCookiesPath)
@@ -165,10 +181,13 @@ function qvcp {
                     "  * nsig/SABR warnings, or only image formats offered: update with 'yt-dlp -U'."
                 )
                 if ($G) {
-                    $hints += "  * Sign-in required: generic mode sends no cookies, so use -Y instead."
+                    $hints += "  * Sign-in required: generic mode sends no cookies. For YouTube use -Y; for Reddit use -R, or for another site use -Y -CookiesFromBrowser firefox (after opening the site in that browser)."
                 }
                 else {
                     $hints += "  * 'tv downgraded player' in the log, or only m3u8 formats offered: YouTube is SABR-restricting the signed-in clients, which leaves HLS capped at 1080p. For public videos retry with -G (no cookies, full DASH ladder), and update with 'yt-dlp -U'."
+                }
+                if ($Y -or $R) {
+                    $hints += "  * Reddit / other site authentication or 403: open the site in your browser and complete any challenge or sign-in, then retry with -R (Firefox), or -R -CookiesFromBrowser browser[:profile]. Plain -Y only supplies the saved cookies file to YouTube."
                 }
                 $attempted = @($Url | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count
                 $lines = @($failed | ForEach-Object { "  '$($_.Url)' (exit code $($_.ExitCode))" })
@@ -193,12 +212,56 @@ function qvcp {
                 }
             }
 
-            & ffmpeg `
-                -i $Url[0] `
-                -c copy `
-                -metadata title="$Word" `
-                -metadata comment="$($Url[0])" `
-                $outputPath
+            # Streamlink is the default capture tool because certificate
+            # verification can be turned off for every request it makes. ffmpeg
+            # 8+ verifies by default and applies -tls_verify only to the URL it
+            # opens itself, not to the playlists and segments the HLS/DASH
+            # demuxer fetches, so a stream host with a bad cert fails there.
+            $captured = $false
+
+            if (Get-Command 'streamlink' -ErrorAction SilentlyContinue) {
+                # Streamlink writes the raw stream, so capture to .ts and remux
+                # to the mp4 afterwards. The remux sits in finally so a live
+                # capture stopped with Ctrl+C still ends up as the mp4.
+                $tsPath = [System.IO.Path]::ChangeExtension($outputPath, '.qvcp.ts')
+                $scheme = if ($Url[0] -match '\.mpd($|\?)') { 'dash://' } else { 'hls://' }
+                # Without verification urllib3 warns on every request, which
+                # floods the console for the length of a live capture.
+                $savedPythonWarnings = $env:PYTHONWARNINGS
+                $env:PYTHONWARNINGS = 'ignore:Unverified HTTPS request'
+                try {
+                    & streamlink --http-no-ssl-verify --force -o $tsPath ($scheme + $Url[0]) best
+                }
+                finally {
+                    $env:PYTHONWARNINGS = $savedPythonWarnings
+                    if ((Test-Path -LiteralPath $tsPath -PathType Leaf) -and (Get-Item -LiteralPath $tsPath).Length -gt 0) {
+                        & ffmpeg -i $tsPath -c copy -metadata title="$Word" -metadata comment="$($Url[0])" $outputPath
+                        if ($LASTEXITCODE -ne 0) {
+                            throw "Remux to '$outputPath' failed (exit code $LASTEXITCODE); the Streamlink capture is kept at '$tsPath'."
+                        }
+                        Remove-Item -LiteralPath $tsPath -Force
+                        $captured = $true
+                    }
+                }
+
+                if (-not $captured) {
+                    Write-Warning "Streamlink captured nothing from '$($Url[0])'; trying ffmpeg."
+                }
+            }
+
+            if (-not $captured) {
+                & ffmpeg `
+                    -tls_verify 0 `
+                    -i $Url[0] `
+                    -c copy `
+                    -metadata title="$Word" `
+                    -metadata comment="$($Url[0])" `
+                    $outputPath
+
+                if ($LASTEXITCODE -ne 0 -and -not (Get-Command 'streamlink' -ErrorAction SilentlyContinue)) {
+                    Write-Warning "ffmpeg exited $LASTEXITCODE. If it reported 'Peer certificate failed verification', install Streamlink (winget install Streamlink.Streamlink): qvcp uses it when present, with verification off."
+                }
+            }
         }
     }
     finally {
