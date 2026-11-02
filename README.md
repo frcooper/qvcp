@@ -37,7 +37,7 @@ qvcp "Show • Episode 12" "https://example.com/path/to/master.m3u8?token=..."
 
 - Saves into `X:\in\clips\YYYY-MM\` (auto-creates the month folder); `-OutDir <folder>` overrides that for one call.
 - Sanitizes the label for filenames and appends `-1`, `-2`, … if a duplicate exists.
-- Captures with [Streamlink](https://streamlink.github.io) when it is on `PATH` (`winget install Streamlink.Streamlink`), into a temporary `<label>.qvcp.ts`, then remuxes that to the mp4 with `ffmpeg -c copy`. Stopping a live capture with Ctrl+C still produces the mp4.
+- Captures with Streamlink when it is on `PATH` (`winget install Streamlink.Streamlink`), into a temporary `<label>.qvcp.ts`, then remuxes that to the mp4 with `ffmpeg -c copy`. Stopping a live capture with Ctrl+C still produces the mp4.
 - TLS certificate verification is off: a stream host with a bad or incomplete certificate chain is not worth failing over. Streamlink is preferred for that reason, since ffmpeg 8+ verifies by default and its `-tls_verify 0` reaches only the URL it opens itself, not the playlists and segments it fetches afterwards. A stream with a bad certificate on those fails in ffmpeg with `Peer certificate failed verification`.
 - Without Streamlink, or when Streamlink captures nothing, it runs `ffmpeg -tls_verify 0 -c copy` on the URL directly, so the stream is remuxed without re-encoding.
 - Records the title and original URL as `title` / `comment` metadata tags.
