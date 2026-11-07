@@ -80,18 +80,57 @@ BeforeAll {
         $global:LASTEXITCODE = 0
     }
 
+    # Undoes what Streamlink does to --player-args: fill {playerinput} with
+    # '-' (stdin), collapse doubled braces (str.format), then split POSIX-shell
+    # style (shlex.split). Only the quoting qvcp produces needs handling:
+    # single-quoted runs, backslash escapes outside quotes, and whitespace.
+    function global:ConvertFrom-QvcpPlayerArgs {
+        param([string]$PlayerArgs)
+        $s = $PlayerArgs -replace '\{playerinput\}', '-' -replace '\{\{', '{' -replace '\}\}', '}'
+        $out = [System.Collections.Generic.List[string]]::new()
+        $cur = [System.Text.StringBuilder]::new()
+        $inToken = $false
+        for ($i = 0; $i -lt $s.Length; $i++) {
+            $c = $s[$i]
+            if ($c -eq "'") {
+                $inToken = $true
+                $end = $s.IndexOf("'", $i + 1)
+                [void]$cur.Append($s.Substring($i + 1, $end - $i - 1))
+                $i = $end
+            }
+            elseif ($c -eq '\') {
+                $inToken = $true
+                [void]$cur.Append($s[++$i])
+            }
+            elseif ([char]::IsWhiteSpace($c)) {
+                if ($inToken) { $out.Add($cur.ToString()); [void]$cur.Clear(); $inToken = $false }
+            }
+            else {
+                $inToken = $true
+                [void]$cur.Append($c)
+            }
+        }
+        if ($inToken) { $out.Add($cur.ToString()) }
+        return , [string[]]$out
+    }
+
     # Stream capture mode prefers Streamlink whenever it resolves, so the
-    # no-Streamlink tests remove this stub and put it back afterwards.
+    # no-Streamlink tests remove this stub and put it back afterwards. When it
+    # "captures", it starts its player the way Streamlink would — the ffmpeg
+    # stub, with the decoded --player-args — and writes the output file.
     function global:Add-QvcpStreamlinkStub {
         Set-Item -Path 'function:global:streamlink' -Value {
             $global:QvcpTestCalls  += , ([string[]]$args)
             $global:QvcpTestTools  += 'streamlink'
             $global:QvcpTestPythonWarnings = $env:PYTHONWARNINGS
             $global:QvcpTestTitles += $Host.UI.RawUI.WindowTitle
-            $global:LASTEXITCODE = Get-QvcpStubExitCode
+            $code = Get-QvcpStubExitCode
             if ($global:QvcpTestStreamlinkWrites) {
-                Set-Content -LiteralPath (Get-QvcpArgAfter -Arguments $args -Flag '-o') -Value 'ts' -NoNewline
+                $playerArgs = ConvertFrom-QvcpPlayerArgs (Get-QvcpArgAfter -Arguments $args -Flag '--player-args')
+                & (Get-QvcpArgAfter -Arguments $args -Flag '--player') @playerArgs
+                Set-Content -LiteralPath $playerArgs[-1] -Value 'mp4' -NoNewline
             }
+            $global:LASTEXITCODE = $code
         }
     }
     Add-QvcpStreamlinkStub
@@ -125,6 +164,7 @@ AfterAll {
     Remove-Item -Path 'function:ffmpeg'          -ErrorAction SilentlyContinue
     Remove-Item -Path 'function:ffprobe'         -ErrorAction SilentlyContinue
     Remove-Item -Path 'function:Add-QvcpStreamlinkStub' -ErrorAction SilentlyContinue
+    Remove-Item -Path 'function:ConvertFrom-QvcpPlayerArgs' -ErrorAction SilentlyContinue
     Remove-Item -Path 'function:streamlink'      -ErrorAction SilentlyContinue
     Remove-Item -Path 'function:Get-QvcpStubExitCode' -ErrorAction SilentlyContinue
     Remove-Item -Path 'function:Get-QvcpArgAfter' -ErrorAction SilentlyContinue
@@ -464,6 +504,19 @@ Describe 'qvcp (stream capture mode, Streamlink)' {
         $sl[-1] | Should -Be 'best'
     }
 
+    It 'streams into ffmpeg as its player, which it never kills, with no temp file' {
+        qvcp 'My Clip' 'https://example.com/stream.m3u8'
+
+        $sl = $global:QvcpTestCalls[0]
+        Get-QvcpArgAfter -Arguments $sl -Flag '--player' | Should -Be 'ffmpeg'
+        $sl | Should -Contain '--player-no-close'
+        $sl | Should -Contain '--player-verbose'
+        $sl | Should -Not -Contain '-o'
+        $sl | Should -Not -Contain '-O'
+        Get-QvcpArgAfter -Arguments $sl -Flag '--player-args' | Should -BeLike '*{playerinput}*'
+        Get-ChildItem -LiteralPath (Get-QvcpMonthFolder) -Name | Should -Be @('My Clip.mp4')
+    }
+
     It 'silences the per-request insecure warning for Streamlink only' {
         $saved = $env:PYTHONWARNINGS
         try {
@@ -484,19 +537,28 @@ Describe 'qvcp (stream capture mode, Streamlink)' {
         $global:QvcpTestCalls[0][-2] | Should -Be 'dash://https://example.com/manifest.mpd?t=1'
     }
 
-    It 'remuxes the capture to an mp4 named after the label, with metadata, and removes the .ts' {
+    It 'has ffmpeg read stdin and write the mp4 named after the label, with metadata' {
         qvcp 'My Clip' 'https://example.com/stream.m3u8'
 
-        $ts = Join-Path (Get-QvcpMonthFolder) 'My Clip.qvcp.ts'
-        Get-QvcpArgAfter -Arguments $global:QvcpTestCalls[0] -Flag '-o' | Should -Be $ts
-        $remux = $global:QvcpTestCalls[1]
-        Get-QvcpArgAfter -Arguments $remux -Flag '-i' | Should -Be $ts
-        $remux | Should -Contain '-c'
-        $remux | Should -Contain 'copy'
-        $remux | Should -Contain 'title=My Clip'
-        $remux | Should -Contain 'comment=https://example.com/stream.m3u8'
-        $remux[-1] | Should -Be (Join-Path (Get-QvcpMonthFolder) 'My Clip.mp4')
-        Test-Path -LiteralPath $ts | Should -BeFalse
+        $ff = $global:QvcpTestCalls[1]
+        Get-QvcpArgAfter -Arguments $ff -Flag '-i' | Should -Be '-'
+        $ff | Should -Contain '-c'
+        $ff | Should -Contain 'copy'
+        $ff | Should -Contain 'title=My Clip'
+        $ff | Should -Contain 'comment=https://example.com/stream.m3u8'
+        $ff[-1] | Should -Be (Join-Path (Get-QvcpMonthFolder) 'My Clip.mp4')
+    }
+
+    It 'quotes the player arguments so quotes, braces and backslashes survive' {
+        $label = "It's {a} \ b}"
+        $url   = 'https://example.com/live.m3u8?a=1&b={x}'
+
+        qvcp $label $url
+
+        $ff = $global:QvcpTestCalls[1]
+        $ff | Should -Contain "title=$label"
+        $ff | Should -Contain "comment=$url"
+        $ff[-1] | Should -Be (Join-Path (Get-QvcpMonthFolder) "It's {a} _ b}.mp4")
     }
 
     It '-OutDir applies to stream capture mode too' {
@@ -520,13 +582,6 @@ Describe 'qvcp (stream capture mode, Streamlink)' {
         qvcp 'Dupe' 'https://example.com/stream.m3u8'
 
         $global:QvcpTestCalls[-1][-1] | Should -Be (Join-Path (Get-QvcpMonthFolder) 'Dupe-2.mp4')
-    }
-
-    It 'keeps the .ts and throws when the remux fails' {
-        $global:QvcpTestExitCode = @(0, 1)
-
-        { qvcp 'Remux Fail' 'https://example.com/stream.m3u8' } | Should -Throw '*capture is kept*'
-        Test-Path -LiteralPath (Join-Path (Get-QvcpMonthFolder) 'Remux Fail.qvcp.ts') | Should -BeTrue
     }
 
     It 'falls back to ffmpeg with a warning when Streamlink captures nothing' {

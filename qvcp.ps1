@@ -223,30 +223,50 @@ function qvcp {
             $captured = $false
 
             if (Get-Command 'streamlink' -ErrorAction SilentlyContinue) {
-                # Streamlink writes the raw stream, so capture to .ts and remux
-                # to the mp4 afterwards. The remux sits in finally so a live
-                # capture stopped with Ctrl+C still ends up as the mp4.
-                $tsPath = [System.IO.Path]::ChangeExtension($outputPath, '.qvcp.ts')
+                # Streamlink streams straight into ffmpeg, which it starts as
+                # its "player" and feeds on stdin, so ffmpeg writes the mp4 as
+                # the stream arrives. This is deliberately not a PowerShell
+                # pipe (streamlink -O | ffmpeg -i -): PowerShell kills a native
+                # command whose stdin it redirects when Ctrl+C stops the
+                # pipeline, and a killed ffmpeg never writes the mp4 index.
+                # Here neither process is redirected by PowerShell; Ctrl+C
+                # reaches both through the console, Streamlink closes ffmpeg's
+                # stdin, and ffmpeg finalizes the file. --player-no-close stops
+                # Streamlink from terminating ffmpeg on exit, which on Windows
+                # is TerminateProcess and would lose the file the same way.
                 $scheme = if ($Url[0] -match '\.mpd($|\?)') { 'dash://' } else { 'hls://' }
+                $ffmpegArgs = @(
+                    '-i', '-'
+                    '-c', 'copy'
+                    '-metadata', "title=$Word"
+                    '-metadata', "comment=$($Url[0])"
+                    $outputPath
+                )
+                # Streamlink fills {playerinput} ('-' for stdin) through
+                # str.format rules, then splits the result POSIX-shell style.
+                # Single-quote every argument (backslashes in the path stay
+                # literal) and double the braces so a label containing { or }
+                # survives the format step.
+                $playerArgs = ($ffmpegArgs | ForEach-Object {
+                    if ($_ -ceq '-') { '{playerinput}' }
+                    else { ("'" + ($_ -replace "'", "'\''") + "'") -replace '\{', '{{' -replace '\}', '}}' }
+                }) -join ' '
                 # Without verification urllib3 warns on every request, which
                 # floods the console for the length of a live capture.
                 $savedPythonWarnings = $env:PYTHONWARNINGS
                 $env:PYTHONWARNINGS = 'ignore:Unverified HTTPS request'
                 try {
-                    & streamlink --http-no-ssl-verify --force -o $tsPath ($scheme + $Url[0]) best
+                    & streamlink --http-no-ssl-verify `
+                        --player ffmpeg --player-args $playerArgs --player-no-close --player-verbose `
+                        ($scheme + $Url[0]) best
                 }
                 finally {
                     $env:PYTHONWARNINGS = $savedPythonWarnings
-                    if ((Test-Path -LiteralPath $tsPath -PathType Leaf) -and (Get-Item -LiteralPath $tsPath).Length -gt 0) {
-                        & ffmpeg -i $tsPath -c copy -metadata title="$Word" -metadata comment="$($Url[0])" $outputPath
-                        if ($LASTEXITCODE -ne 0) {
-                            throw "Remux to '$outputPath' failed (exit code $LASTEXITCODE); the Streamlink capture is kept at '$tsPath'."
-                        }
-                        Remove-Item -LiteralPath $tsPath -Force
-                        $captured = $true
-                    }
                 }
 
+                # Streamlink starts ffmpeg only once the stream opens, and
+                # does not pass on its exit code, so the file is the evidence.
+                $captured = [System.IO.File]::Exists($outputPath) -and ([System.IO.FileInfo]$outputPath).Length -gt 0
                 if (-not $captured) {
                     Write-Warning "Streamlink captured nothing from '$($Url[0])'; trying ffmpeg."
                 }
