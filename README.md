@@ -173,7 +173,7 @@ Requires Pester 5+ (`Install-Module Pester -MinimumVersion 5.0.0 -Scope CurrentU
 
 ## How it decides “best”
 
-- HLS: If a master playlist (`.m3u8` with `#EXT-X-STREAM-INF`) is found, the script picks the highest‑scoring variant by resolution and bandwidth, with a codec preference order tuned for easy remux: `h264/avc1` > `vp9` > `hvc1/hev1` > `av01`.
+- HLS: If a master playlist (`.m3u8` with `#EXT-X-STREAM-INF`) is found, the script picks the highest‑scoring variant by resolution and bandwidth, with a codec preference order tuned for easy remux: `h264/avc1` > `vp9` > `hvc1/hev1` > `av01`. If that variant takes its audio from a separate playlist (an `#EXT-X-MEDIA:TYPE=AUDIO` group with a `URI`), the master URL is copied instead, because the variant alone has no sound; `qvcp`/Streamlink then picks the best variant and muxes the audio in.
 - DASH: If an MPD is present, the script scores video representations similarly and returns the MPD URL (players and tools select optimal segments).
 - Raw mode (Ctrl): bypasses upgrading and copies the exact URL seen.
 
