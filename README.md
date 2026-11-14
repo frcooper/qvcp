@@ -9,7 +9,8 @@ Looking for a Brave Shields scriptlet version? See [`brave-scriptlet.md`](brave-
 ## Install
 
 - Firefox: Tampermonkey, Violentmonkey, or FireMonkey.
-- Click “Create new userscript,” paste the code from `video-stream-capture.user.js`, and save.
+- Open [the raw script](https://raw.githubusercontent.com/frcooper/qvcp/main/video-stream-capture.user.js); the userscript manager offers to install it. Installed this way, or pasted in by hand, the manager checks the same URL for updates (the header's `@updateURL` / `@downloadURL`) and installs a new copy when `@version` goes up.
+- A copy installed before 2.2.0 has no update URL, so replace it once by hand (paste over it in the manager's editor; don't add a second copy).
 - No site permissions tuning needed due to `@match *://*/*`.
 - No extra grants are required beyond `GM_setClipboard`.
 
@@ -173,7 +174,7 @@ Requires Pester 5+ (`Install-Module Pester -MinimumVersion 5.0.0 -Scope CurrentU
 
 ## How it decides “best”
 
-- HLS: If a master playlist (`.m3u8` with `#EXT-X-STREAM-INF`) is found, the script picks the highest‑scoring variant by resolution and bandwidth, with a codec preference order tuned for easy remux: `h264/avc1` > `vp9` > `hvc1/hev1` > `av01`.
+- HLS: If a master playlist (`.m3u8` with `#EXT-X-STREAM-INF`) is found, the script picks the highest‑scoring variant by resolution and bandwidth, with a codec preference order tuned for easy remux: `h264/avc1` > `vp9` > `hvc1/hev1` > `av01`. If that variant takes its audio from a separate playlist (an `#EXT-X-MEDIA:TYPE=AUDIO` group with a `URI`), the master URL is copied instead, because the variant alone has no sound; `qvcp`/Streamlink then picks the best variant and muxes the audio in.
 - DASH: If an MPD is present, the script scores video representations similarly and returns the MPD URL (players and tools select optimal segments).
 - Raw mode (Ctrl): bypasses upgrading and copies the exact URL seen.
 

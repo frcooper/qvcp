@@ -101,3 +101,4 @@ This repo is a small, copy/paste–driven toolkit:
 ## Docs/versioning
 
 - If you change userscript behavior, update [README.md](README.md) and keep the userscript header `@version` in [video-stream-capture.user.js](video-stream-capture.user.js) consistent with the change.
+- The userscript header's `@updateURL` / `@downloadURL` point at the raw file on `main`, and managers install an update only when `@version` increases, so every change to the script that should reach installed copies needs a version bump. The Brave scriptlet has no update mechanism.

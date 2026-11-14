@@ -74,14 +74,24 @@
   const pickBestFromHLSMaster = (masterText, masterURL) => {
     const lines = masterText.split(/\r?\n/);
     const variants = [];
+    // Audio groups carried as separate playlists. A variant that references one
+    // has no audio of its own, so copying the variant URL would drop the sound.
+    const separateAudio = new Set();
     for (let i = 0; i < lines.length; i++) {
       const L = lines[i];
+      if (L.startsWith('#EXT-X-MEDIA:')) {
+        const attrs = L.slice(13);
+        const group = /GROUP-ID="([^"]+)"/i.exec(attrs)?.[1];
+        if (group && /TYPE=AUDIO/i.test(attrs) && /URI="/i.test(attrs)) separateAudio.add(group);
+        continue;
+      }
       if (L.startsWith('#EXT-X-STREAM-INF:')) {
         const info = L.slice(18);
         const next = (lines[i + 1] || '').trim();
         const bw = /BANDWIDTH=(\d+)/i.exec(info)?.[1];
         const res = /RESOLUTION=(\d+)x(\d+)/i.exec(info);
         const codecs = /CODECS="([^"]+)"/i.exec(info)?.[1] || '';
+        const audio = /AUDIO="([^"]+)"/i.exec(info)?.[1] || '';
         const url = absURL(next, masterURL);
         if (!url) continue;
         variants.push({
@@ -90,6 +100,7 @@
           w: res ? parseInt(res[1], 10) : 0,
           h: res ? parseInt(res[2], 10) : 0,
           codecs: codecs.toLowerCase(),
+          audio,
         });
       }
     }
@@ -108,6 +119,8 @@
         + (PREFER_RESOLUTION ? v.bw : resScore);
     });
     variants.sort((a, b) => b._score - a._score);
+    // Keep the master so the downloader can mux the video and audio playlists together.
+    if (variants[0].audio && separateAudio.has(variants[0].audio)) return absURL(masterURL);
     return variants[0].url;
   };
 
