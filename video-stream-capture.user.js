@@ -6,6 +6,8 @@
 // @match        *://*/*
 // @run-at       document-start
 // @grant        GM_setClipboard
+// @updateURL    https://raw.githubusercontent.com/frcooper/qvcp/main/video-stream-capture.user.js
+// @downloadURL  https://raw.githubusercontent.com/frcooper/qvcp/main/video-stream-capture.user.js
 // ==/UserScript==
 (() => {
   'use strict';

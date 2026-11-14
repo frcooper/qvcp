@@ -9,7 +9,8 @@ Looking for a Brave Shields scriptlet version? See [`brave-scriptlet.md`](brave-
 ## Install
 
 - Firefox: Tampermonkey, Violentmonkey, or FireMonkey.
-- Click “Create new userscript,” paste the code from `video-stream-capture.user.js`, and save.
+- Open [the raw script](https://raw.githubusercontent.com/frcooper/qvcp/main/video-stream-capture.user.js); the userscript manager offers to install it. Installed this way, or pasted in by hand, the manager checks the same URL for updates (the header's `@updateURL` / `@downloadURL`) and installs a new copy when `@version` goes up.
+- A copy installed before 2.2.0 has no update URL, so replace it once by hand (paste over it in the manager's editor; don't add a second copy).
 - No site permissions tuning needed due to `@match *://*/*`.
 - No extra grants are required beyond `GM_setClipboard`.
 
