@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Copy Best Stream (HLS/DASH) on Right-Click
+// @name         Copy qvcp Command / Best Stream (HLS/DASH) on Right-Click
 // @namespace    video.stream.copy
-// @version      2.3.0
-// @description  Right-click a <video> to copy the highest-quality HLS/DASH URL seen on the page (or the active one). Ctrl+Right-Click copies raw without upgrading. Alt+Shift+V or the userscript menu does the same where the player hijacks right-click.
+// @version      3.0.0
+// @description  Right-click a <video> to copy a ready-to-run qvcp command (page title, best HLS/DASH URL, page URL). Shift+Right-Click copies just the stream URL. Ctrl copies the raw URL without upgrading. Alt+Shift+Q / Alt+Shift+V and the userscript menu do the same where the player hijacks right-click.
 // @match        *://*/*
 // @run-at       document-start
 // @grant        GM_setClipboard
@@ -302,7 +302,58 @@
     return best;
   };
 
-  const copyBest = async (video, rawMode) => {
+  // ---------- page context (title + URL for the qvcp command) ----------
+  // A player in a cross-origin iframe cannot read the page it sits in, and
+  // its referrer is usually cut to the origin. Every frame runs this script,
+  // so the frame asks the top one by postMessage, and falls back to the
+  // referrer, then to its own address, when no answer comes.
+  const isTop = window.top === window;
+  window.addEventListener('message', (ev) => {
+    const ask = ev?.data?.__vsc_ask_page__;
+    if (!ask || !isTop || !ev.source) return;
+    ev.source.postMessage({ __vsc_page__: ask, url: location.href, title: document.title }, '*');
+  });
+
+  const askTop = () => new Promise((resolve) => {
+    const id = Math.random().toString(36).slice(2);
+    const done = (v) => { window.removeEventListener('message', onMsg); clearTimeout(t); resolve(v); };
+    const onMsg = (ev) => { if (ev?.data?.__vsc_page__ === id) done({ url: ev.data.url, title: ev.data.title }); };
+    const t = setTimeout(() => done(null), 400);
+    window.addEventListener('message', onMsg);
+    try { window.top.postMessage({ __vsc_ask_page__: id }, '*'); } catch { done(null); }
+  });
+
+  const getPage = async () => {
+    if (isTop) return { url: location.href, title: document.title };
+    const top = await askTop();
+    if (top?.url) return top;
+    return { url: document.referrer || location.href, title: document.title };
+  };
+
+  // "Clip name - SiteName" -> "Clip name": drop a leading or trailing segment
+  // that is just the site's name (compared against the hostname).
+  const cleanTitle = (title, pageUrl) => {
+    let host = '';
+    try { host = new URL(pageUrl).hostname.replace(/^www\./, '').toLowerCase().replace(/[^a-z0-9]/g, ''); } catch {}
+    const isSite = (seg) => {
+      const k = seg.toLowerCase().replace(/[^a-z0-9]/g, '');
+      return k.length >= 3 && host && (host.includes(k) || k.includes(host.replace(/(com|net|org|tv)$/, '')));
+    };
+    let parts = (title || '').split(/\s+[-|–—•:]\s+/).map(p => p.trim()).filter(Boolean);
+    if (parts.length > 1 && isSite(parts[parts.length - 1])) parts.pop();
+    if (parts.length > 1 && isSite(parts[0])) parts.shift();
+    const t = parts.join(' - ').trim();
+    if (t) return t;
+    try { return decodeURIComponent(new URL(pageUrl).pathname.split('/').filter(Boolean).pop() || '') || 'clip'; } catch { return 'clip'; }
+  };
+
+  // PowerShell single-quoted string. PowerShell also treats the typographic
+  // quotes as single quotes, so those are doubled too.
+  const psQuote = (s) => "'" + String(s).replace(/['‘’‚‛]/g, '$&$&') + "'";
+
+  // ---------- copy ----------
+  // mode: 'cmd' copies a qvcp command, 'url' just the stream URL.
+  const copyStream = async (video, rawMode, mode) => {
     const b = getBucket();
 
     // prefer URL bound to this video, else master/MPD, else media
@@ -310,11 +361,29 @@
     const pick = vUrl || b.latestMaster || b.latestMPD || b.latestMedia;
     if (!pick) { toast('No HLS/DASH URL found on this page/video', false); return; }
 
-    const out = rawMode ? pick : (await upgradeToBest(pick)) || pick;
+    const stream = rawMode ? pick : (await upgradeToBest(pick)) || pick;
+    let out = stream, label = rawMode ? 'copied (raw)' : 'copied (best)';
+    if (mode === 'cmd') {
+      const page = await getPage();
+      const title = cleanTitle(page.title, page.url);
+      out = `qvcp ${psQuote(title)} ${psQuote(stream)} -SourceUrl ${psQuote(page.url)}`;
+      label = `copied qvcp command${rawMode ? ' (raw)' : ''}`;
+    }
     const ok = await copyText(out);
-    toast(ok ? (rawMode ? `copied (raw):
-${out}` : `copied (best):
-${out}`) : 'Failed to copy URL (clipboard blocked)', ok);
+    toast(ok ? `${label}:\n${out}` : 'Failed to copy (clipboard blocked)', ok);
+  };
+
+  // Firefox never sends contextmenu to the page on Shift+right-click (it is
+  // the "force the browser menu" gesture), so Shift is read on mousedown.
+  // Chrome sends both; the stamp keeps the click from being handled twice.
+  let shiftHandledAt = 0;
+  const onMouseDown = (ev) => {
+    if (ev.button !== 2 || !ev.shiftKey) return;
+    const video = videoAt(ev);
+    if (!video) return;
+    shiftHandledAt = Date.now();
+    ev.stopImmediatePropagation();
+    copyStream(video, !!ev[RAW_MODIFIER], 'url');
   };
 
   const onContextMenu = (ev) => {
@@ -323,31 +392,35 @@ ${out}`) : 'Failed to copy URL (clipboard blocked)', ok);
     // Keep the player's own handlers from eating the click (and from replacing
     // the browser menu with theirs); the native menu still opens.
     ev.stopImmediatePropagation();
-    copyBest(video, !!ev[RAW_MODIFIER]);
+    if (ev.shiftKey && Date.now() - shiftHandledAt < 2000) return;
+    copyStream(video, !!ev[RAW_MODIFIER], ev.shiftKey ? 'url' : 'cmd');
   };
 
-  // Alt+Shift+V copies best, Ctrl+Alt+Shift+V copies raw.
+  // Alt+Shift+Q copies the qvcp command, Alt+Shift+V the stream URL; add Ctrl
+  // for the raw URL.
   const onKeyDown = (ev) => {
-    if (!(ev.altKey && ev.shiftKey && ev.code === 'KeyV')) return;
+    if (!(ev.altKey && ev.shiftKey && (ev.code === 'KeyQ' || ev.code === 'KeyV'))) return;
     ev.preventDefault();
     ev.stopImmediatePropagation();
-    copyBest(largestVideo(), ev.ctrlKey);
+    copyStream(largestVideo(), ev.ctrlKey, ev.code === 'KeyQ' ? 'cmd' : 'url');
   };
 
+  window.addEventListener('mousedown', onMouseDown, true);
   window.addEventListener('contextmenu', onContextMenu, true);
   window.addEventListener('keydown', onKeyDown, true);
 
-  // The menu entry lives in the userscript manager, out of the page's reach.
-  // Every frame runs this script, so register it in the top frame and in any
-  // frame that has actually seen a stream (players often live in an iframe),
-  // not in every ad frame.
+  // The menu entries live in the userscript manager, out of the page's reach.
+  // Every frame runs this script, so register them in the top frame and in
+  // any frame that has actually seen a stream (players often live in an
+  // iframe), not in every ad frame.
   let menuRegistered = false;
   registerMenu = () => {
     if (menuRegistered || typeof GM_registerMenuCommand !== 'function') return;
     menuRegistered = true;
-    const where = window.top === window ? '' : ` (frame: ${location.hostname})`;
-    GM_registerMenuCommand(`Copy best stream${where}`, () => copyBest(largestVideo(), false));
-    GM_registerMenuCommand(`Copy raw stream${where}`, () => copyBest(largestVideo(), true));
+    const where = isTop ? '' : ` (frame: ${location.hostname})`;
+    GM_registerMenuCommand(`Copy qvcp command${where}`, () => copyStream(largestVideo(), false, 'cmd'));
+    GM_registerMenuCommand(`Copy best stream URL${where}`, () => copyStream(largestVideo(), false, 'url'));
+    GM_registerMenuCommand(`Copy raw stream URL${where}`, () => copyStream(largestVideo(), true, 'url'));
   };
-  if (window.top === window) registerMenu();
+  if (isTop) registerMenu();
 })();
