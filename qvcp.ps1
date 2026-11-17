@@ -31,6 +31,13 @@ function qvcp {
         [ValidateNotNullOrEmpty()]
         [string]$CookiesFromBrowser,
 
+        # The page the stream was captured from. When given, the comment is
+        # the [[SourceURL|...]] sigil for it, as -G/-Y write, instead of the
+        # stream URL, which is signed and expires. The userscript fills it in.
+        [Parameter(ParameterSetName='FFmpeg')]
+        [ValidateNotNullOrEmpty()]
+        [string]$SourceUrl,
+
         # Download into this folder instead of the dated one under the
         # output root. ytxa -Upgrade uses it to replace a file in place.
         [string]$OutDir
@@ -224,6 +231,7 @@ function qvcp {
             # opens itself, not to the playlists and segments the HLS/DASH
             # demuxer fetches, so a stream host with a bad cert fails there.
             $captured = $false
+            $comment = if ($SourceUrl) { Format-QvcpSourceSigil $SourceUrl } else { $Url[0] }
 
             if (Get-Command 'streamlink' -ErrorAction SilentlyContinue) {
                 # Streamlink streams straight into ffmpeg, which it starts as
@@ -242,7 +250,7 @@ function qvcp {
                     '-i', '-'
                     '-c', 'copy'
                     '-metadata', "title=$Word"
-                    '-metadata', "comment=$($Url[0])"
+                    '-metadata', "comment=$comment"
                     $outputPath
                 )
                 # Streamlink fills {playerinput} ('-' for stdin) through
@@ -281,7 +289,7 @@ function qvcp {
                     -i $Url[0] `
                     -c copy `
                     -metadata title="$Word" `
-                    -metadata comment="$($Url[0])" `
+                    -metadata comment="$comment" `
                     $outputPath
 
                 if ($LASTEXITCODE -ne 0 -and -not (Get-Command 'streamlink' -ErrorAction SilentlyContinue)) {

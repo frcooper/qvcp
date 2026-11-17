@@ -549,6 +549,14 @@ Describe 'qvcp (stream capture mode, Streamlink)' {
         $ff[-1] | Should -Be (Join-Path (Get-QvcpMonthFolder) 'My Clip.mp4')
     }
 
+    It 'tags the comment with the page URL when -SourceUrl is given' {
+        qvcp 'My Clip' 'https://cdn.example.com/stream.m3u8' -SourceUrl 'https://example.com/videos/42/my-clip/'
+
+        $ff = $global:QvcpTestCalls[1]
+        $ff | Should -Contain 'comment=[[SourceURL|https://example.com/videos/42/my-clip/]]'
+        $global:QvcpTestCalls[0][-2] | Should -Be 'hls://https://cdn.example.com/stream.m3u8'
+    }
+
     It 'quotes the player arguments so quotes, braces and backslashes survive' {
         $label = "It's {a} \ b}"
         $url   = 'https://example.com/live.m3u8?a=1&b={x}'
@@ -625,6 +633,12 @@ Describe 'qvcp (stream capture mode, no Streamlink)' {
         $call[-1] | Should -Be (Join-Path (Get-QvcpMonthFolder) 'My Clip.mp4')
     }
 
+    It 'tags the comment with the page URL when -SourceUrl is given' {
+        qvcp 'My Clip' 'https://cdn.example.com/stream.m3u8' -SourceUrl 'https://example.com/videos/42/'
+
+        $global:QvcpTestCalls[0] | Should -Contain 'comment=[[SourceURL|https://example.com/videos/42/]]'
+    }
+
     It 'points at installing Streamlink when ffmpeg fails' {
         $global:QvcpTestExitCode = 1
 
@@ -650,6 +664,10 @@ Describe 'qvcp parameter binding' {
 
     It 'rejects -G without a URL' {
         { qvcp -G } | Should -Throw
+    }
+
+    It 'rejects -SourceUrl outside capture mode' {
+        { qvcp -G 'https://example.com/clip.mp4' -SourceUrl 'https://example.com/' } | Should -Throw
     }
 
     It 'rejects a bare URL with no label in ffmpeg mode' {
