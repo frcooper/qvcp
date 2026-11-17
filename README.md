@@ -91,7 +91,7 @@ qvcp -G "https://www.youtube.com/watch?v=..."
 qvcp -G "https://example.com/a.mp4" "https://example.com/b.mp4"
 ```
 
-`-G` runs yt-dlp with `--ignore-config --no-cookies --no-cookies-from-browser`, so neither the cookies file nor anything in your personal `yt-dlp.conf` can slip a session in. Because `--ignore-config` also discards your own format and output-template preferences, `-G` downloads use yt-dlp's defaults.
+`-G` runs yt-dlp with `--ignore-config --no-cookies --no-cookies-from-browser`, so neither the cookies file nor anything in your personal `yt-dlp.conf` can slip a session in. It also passes `--extractor-args generic:impersonate`, so on sites yt-dlp has no extractor for, the page request looks like a browser and gets past Cloudflare's anti-bot 403 (sites with their own extractor ignore it; it needs a yt-dlp with `curl_cffi`, which the standalone `yt-dlp.exe` includes). If the page then downloads but yt-dlp reports `Unsupported URL`, it can't find the video in the page: use the userscript's right-click command instead. Because `--ignore-config` also discards your own format and output-template preferences, `-G` downloads use yt-dlp's defaults.
 
 `-Y` and `-G` are mutually exclusive — passing both is a parameter-binding error. If a `-G` download fails on a YouTube sign-in wall, retry it with `-Y`. Plain `-Y` only attaches the saved cookies file to YouTube URLs.
 

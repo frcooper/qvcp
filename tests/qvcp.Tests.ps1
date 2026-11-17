@@ -203,6 +203,13 @@ Describe 'qvcp -G (generic yt-dlp mode)' {
         $global:QvcpTestCalls[0] | Should -Not -Contain '--cookies'
     }
 
+    It 'impersonates a browser for the generic extractor' {
+        qvcp -G 'https://example.com/videos/1/clip/'
+
+        $call = $global:QvcpTestCalls[0]
+        Get-QvcpArgAfter -Arguments $call -Flag '--extractor-args' | Should -Be 'generic:impersonate'
+    }
+
     It 'accepts the -Generic alias' {
         qvcp -Generic 'https://youtu.be/abc123'
 
