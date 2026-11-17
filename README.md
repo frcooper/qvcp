@@ -12,13 +12,16 @@ Looking for a Brave Shields scriptlet version? See [`brave-scriptlet.md`](brave-
 - Open [the raw script](https://raw.githubusercontent.com/frcooper/qvcp/main/video-stream-capture.user.js); the userscript manager offers to install it. Installed this way, or pasted in by hand, the manager checks the same URL for updates (the header's `@updateURL` / `@downloadURL`) and installs a new copy when `@version` goes up.
 - A copy installed before 2.2.0 has no update URL, so replace it once by hand (paste over it in the manager's editor; don't add a second copy).
 - No site permissions tuning needed due to `@match *://*/*`.
-- No extra grants are required beyond `GM_setClipboard`.
+- Grants: `GM_setClipboard` (copy) and `GM_registerMenuCommand` (the menu entries below).
 
 ## Usage
 
-- Right‑click directly on the playing `<video>` element.
+- Right‑click on the playing video. A transparent player overlay on top of it is fine: the script finds the video under the pointer and keeps the player's own right‑click handler from swallowing the click.
   - Regular right‑click: copies best variant from master/MPD when available.
   - Ctrl+right‑click: copies the raw URL you targeted or last seen.
+- Where the page still gets in the way, use a trigger the page can't intercept (both act on the largest video on the page):
+  - Alt+Shift+V copies the best variant; Ctrl+Alt+Shift+V copies raw.
+  - The userscript manager's menu (toolbar icon) has **Copy best stream** and **Copy raw stream**. When the player sits in an iframe, the entries marked `(frame: host)` are the ones that saw its stream.
 
 Tip: You can paste the copied URL directly into tools or players. For downloads or remux:
 
@@ -36,6 +39,7 @@ For playback, VLC can open the same URL.
 qvcp "Show • Episode 12" "https://example.com/path/to/master.m3u8?token=..."
 ```
 
+- Quoting the URL is safest, but an unquoted one with a comma in it (signed CDN URLs such as `.../key=abc,end=123/...m3u8`) also works: PowerShell splits it into an array, and qvcp joins back any piece that doesn't start with `scheme://` onto the URL before it. This applies to `-G`/`-Y`/`-R` lists too.
 - Saves into `X:\in\clips\YYYY-MM\` (auto-creates the month folder); `-OutDir <folder>` overrides that for one call.
 - Sanitizes the label for filenames and appends `-1`, `-2`, … if a duplicate exists.
 - Captures with Streamlink when it is on `PATH` (`winget install Streamlink.Streamlink`), streaming straight into `ffmpeg -c copy`, which writes the mp4 as the stream arrives (no temporary file). Stopping a live capture with Ctrl+C still produces a playable mp4.
