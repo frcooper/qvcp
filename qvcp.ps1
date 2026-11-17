@@ -161,6 +161,11 @@ function qvcp {
 
                 if ($G) {
                     $ytDlpArgs += @('--ignore-config', '--no-cookies', '--no-cookies-from-browser')
+                    # Make the generic extractor's page request look like a
+                    # browser, which gets past Cloudflare's anti-bot 403. Sites
+                    # with their own extractor ignore it. Needs a yt-dlp with
+                    # curl_cffi (the standalone yt-dlp.exe has it).
+                    $ytDlpArgs += @('--extractor-args', 'generic:impersonate')
                 }
                 elseif ($CookiesFromBrowser) {
                     $ytDlpArgs += @('--ignore-config', '--no-cookies', '--cookies-from-browser', $CookiesFromBrowser)
@@ -194,6 +199,7 @@ function qvcp {
                     "  * nsig/SABR warnings, or only image formats offered: update with 'yt-dlp -U'."
                 )
                 if ($G) {
+                    $hints += "  * 'Unsupported URL' after the page downloaded: yt-dlp cannot find the video in the page. Play it in the browser and right-click it with the video-stream-capture userscript, then run the qvcp command it copies."
                     $hints += "  * Sign-in required: generic mode sends no cookies. For YouTube use -Y; for Reddit use -R, or for another site use -Y -CookiesFromBrowser firefox (after opening the site in that browser)."
                 }
                 else {
