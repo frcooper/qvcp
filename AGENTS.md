@@ -8,7 +8,7 @@ This repo is a small, copy/paste–driven toolkit:
 
 ## Key files
 
-- [video-stream-capture.user.js](video-stream-capture.user.js): Tampermonkey/Violentmonkey userscript (`@grant GM_setClipboard`).
+- [video-stream-capture.user.js](video-stream-capture.user.js): Tampermonkey/Violentmonkey userscript (`@grant GM_setClipboard`, `GM_registerMenuCommand`).
 - [brave-video-stream-capture.scriptlet.js](brave-video-stream-capture.scriptlet.js): Brave scriptlet variant (no GM_* APIs; clipboard fallbacks).
 - [brave-scriptlet.md](brave-scriptlet.md): Brave installation / enablement steps.
 - [qvcp.ps1](qvcp.ps1): PowerShell `qvcp` function wrapper around `ffmpeg`.

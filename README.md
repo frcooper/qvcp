@@ -1,6 +1,6 @@
 # Video Stream Capture (Right‑Click to Copy HLS/DASH)
 
-Right‑click any playing `<video>` to instantly copy a stream URL. Normal right‑click copies the best variant (from HLS master or DASH MPD when available). Ctrl+right‑click copies the raw URL you targeted or last seen.
+Right‑click any playing `<video>` to copy a ready‑to‑run `qvcp` command for it: the page title as the label, the best stream variant (from HLS master or DASH MPD when available), and the page URL as `-SourceUrl`. Shift+right‑click copies just the stream URL; add Ctrl to either for the raw URL you targeted or last seen.
 
 This userscript is hardened for real sites: keeps a master‑first strategy, prefers remux‑friendly codecs, instruments network calls from the page context (works under CSP/sandbox), runs in all frames, preserves query tokens, and never blocks native menus.
 
@@ -12,13 +12,18 @@ Looking for a Brave Shields scriptlet version? See [`brave-scriptlet.md`](brave-
 - Open [the raw script](https://raw.githubusercontent.com/frcooper/qvcp/main/video-stream-capture.user.js); the userscript manager offers to install it. Installed this way, or pasted in by hand, the manager checks the same URL for updates (the header's `@updateURL` / `@downloadURL`) and installs a new copy when `@version` goes up.
 - A copy installed before 2.2.0 has no update URL, so replace it once by hand (paste over it in the manager's editor; don't add a second copy).
 - No site permissions tuning needed due to `@match *://*/*`.
-- No extra grants are required beyond `GM_setClipboard`.
+- Grants: `GM_setClipboard` (copy) and `GM_registerMenuCommand` (the menu entries below).
 
 ## Usage
 
-- Right‑click directly on the playing `<video>` element.
-  - Regular right‑click: copies best variant from master/MPD when available.
-  - Ctrl+right‑click: copies the raw URL you targeted or last seen.
+- Right‑click on the playing video. A transparent player overlay on top of it is fine: the script finds the video under the pointer and keeps the player's own right‑click handler from swallowing the click.
+  - Right‑click: copies `qvcp '<title>' '<best stream URL>' -SourceUrl '<page URL>'`, ready to paste into PowerShell. The title is the page title with a leading or trailing site‑name segment (`… - SiteName`) dropped; every part is single‑quoted, so commas and quotes in it are safe.
+  - Shift+right‑click: copies just the best stream URL, for other tools. (Firefox never shows the page a Shift+right‑click, so the script reads it on mousedown.)
+  - Add Ctrl to either: uses the raw URL you targeted or last seen, without upgrading to the best variant.
+- Where the page still gets in the way, use a trigger the page can't intercept (these act on the largest video on the page):
+  - Alt+Shift+Q copies the qvcp command; Alt+Shift+V copies the stream URL. Add Ctrl for the raw URL.
+  - The userscript manager's menu (toolbar icon) has **Copy qvcp command**, **Copy best stream URL** and **Copy raw stream URL**. When the player sits in an iframe, the entries marked `(frame: host)` are the ones that saw its stream.
+- A player in an iframe from another site can't read the page around it, so it asks the top frame (the script runs there too) for its title and URL. If no answer comes, it uses the frame's referrer, then the frame's own address.
 
 Tip: You can paste the copied URL directly into tools or players. For downloads or remux:
 
@@ -36,12 +41,13 @@ For playback, VLC can open the same URL.
 qvcp "Show • Episode 12" "https://example.com/path/to/master.m3u8?token=..."
 ```
 
+- Quoting the URL is safest, but an unquoted one with a comma in it (signed CDN URLs such as `.../key=abc,end=123/...m3u8`) also works: PowerShell splits it into an array, and qvcp joins back any piece that doesn't start with `scheme://` onto the URL before it. This applies to `-G`/`-Y`/`-R` lists too.
 - Saves into `X:\in\clips\YYYY-MM\` (auto-creates the month folder); `-OutDir <folder>` overrides that for one call.
 - Sanitizes the label for filenames and appends `-1`, `-2`, … if a duplicate exists.
 - Captures with Streamlink when it is on `PATH` (`winget install Streamlink.Streamlink`), streaming straight into `ffmpeg -c copy`, which writes the mp4 as the stream arrives (no temporary file). Stopping a live capture with Ctrl+C still produces a playable mp4.
 - TLS certificate verification is off: a stream host with a bad or incomplete certificate chain is not worth failing over. Streamlink is preferred for that reason, since ffmpeg 8+ verifies by default and its `-tls_verify 0` reaches only the URL it opens itself, not the playlists and segments it fetches afterwards. A stream with a bad certificate on those fails in ffmpeg with `Peer certificate failed verification`.
 - Without Streamlink, or when Streamlink captures nothing, it runs `ffmpeg -tls_verify 0 -c copy` on the URL directly, so the stream is remuxed without re-encoding.
-- Records the title and original URL as `title` / `comment` metadata tags.
+- Records the label as the `title` tag. The `comment` tag is the stream URL, or, with `-SourceUrl <page URL>`, the `[[SourceURL|<page URL>]]` sigil that `-G`/`-Y` downloads carry, so the file points back at a page that still works after the signed stream URL has expired. The userscript's right‑click command passes `-SourceUrl` for you.
 - Temporarily sets the terminal title to the label to make long captures easy to identify.
 
 ### YouTube / yt-dlp mode (`-Y`)
