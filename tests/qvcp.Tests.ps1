@@ -655,6 +655,19 @@ Describe 'qvcp parameter binding' {
     It 'rejects a bare URL with no label in ffmpeg mode' {
         { qvcp 'https://example.com/stream.m3u8' } | Should -Throw
     }
+
+    It 'rejoins an unquoted signed URL split at its comma in capture mode' {
+        qvcp 'My Clip' https://cdn.example.com/key=abc,end=123/hq.mp4.m3u8
+
+        $global:QvcpTestCalls[0][-2] | Should -Be 'hls://https://cdn.example.com/key=abc,end=123/hq.mp4.m3u8'
+    }
+
+    It 'rejoins an unquoted signed URL split at its comma in -G mode' {
+        qvcp -G https://cdn.example.com/key=abc,end=123/hq.mp4.m3u8
+
+        $global:QvcpTestCalls.Count | Should -Be 1
+        $global:QvcpTestCalls[0][-1] | Should -Be 'https://cdn.example.com/key=abc,end=123/hq.mp4.m3u8'
+    }
 }
 
 Describe 'qvcp window title handling' {

@@ -38,6 +38,9 @@ function qvcp {
 
     if ($R -and -not $CookiesFromBrowser) { $CookiesFromBrowser = 'firefox' }
 
+    # An unquoted signed URL with a comma in it arrives split; rejoin it.
+    $Url = Join-QvcpSplitUrl $Url
+
     # FROM:TO for yt-dlp --parse-metadata, split on the first unescaped colon.
     # The sigil deliberately contains no colon, so nothing here needs escaping,
     # and '|' cannot appear unencoded in a URL, so splitting on it is safe.

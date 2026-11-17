@@ -170,3 +170,31 @@ Describe 'QvcpCommon files on disk' {
         @(Find-QvcpDownload (Join-Path $global:QvcpCommonRoot 'nope') 'dQw4w9WgXcQ').Count | Should -Be 0
     }
 }
+
+Describe 'Join-QvcpSplitUrl' {
+
+    It 'rejoins a URL that PowerShell split at a comma' {
+        $result = Join-QvcpSplitUrl @('https://cdn.example.com/key=abc', 'end=123/media/hq.mp4.m3u8')
+
+        $result | Should -Be @('https://cdn.example.com/key=abc,end=123/media/hq.mp4.m3u8')
+    }
+
+    It 'rejoins every piece when the URL had several commas' {
+        $result = @(Join-QvcpSplitUrl @('https://a.example/x=1', 'y=2', 'z=3'))
+
+        $result.Count | Should -Be 1
+        $result[0] | Should -Be 'https://a.example/x=1,y=2,z=3'
+    }
+
+    It 'leaves a list of separate URLs alone' {
+        $result = Join-QvcpSplitUrl @('https://a.example/1', 'http://b.example/2')
+
+        $result | Should -Be @('https://a.example/1', 'http://b.example/2')
+    }
+
+    It 'keeps a lone non-URL first argument as it is' {
+        $result = @(Join-QvcpSplitUrl @('not-a-url'))
+
+        $result | Should -Be @('not-a-url')
+    }
+}
