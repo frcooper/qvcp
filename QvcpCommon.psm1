@@ -103,4 +103,22 @@ function Test-QvcpSourceComment([string]$Comment, [string]$Id) {
     [bool]$url -and (Get-QvcpUrlId $url) -ceq $Id
 }
 
+# PowerShell reads an unquoted 'a,b' argument as an array, so a signed CDN
+# URL such as '.../key=XYZ,end=123/media.m3u8' arrives as two pieces. Any
+# piece that is not a URL of its own (no 'scheme://') is put back onto the
+# URL before it with the comma it was split on. A list of real URLs is left
+# alone, since each piece then starts with its own scheme.
+function Join-QvcpSplitUrl([string[]]$Url) {
+    $joined = [System.Collections.Generic.List[string]]::new()
+    foreach ($piece in $Url) {
+        if ($joined.Count -gt 0 -and $piece -notmatch '^[A-Za-z][A-Za-z0-9+.-]*://') {
+            $joined[$joined.Count - 1] += ',' + $piece
+        }
+        else {
+            $joined.Add($piece)
+        }
+    }
+    , [string[]]$joined.ToArray()
+}
+
 Export-ModuleMember -Function *-Qvcp*
